@@ -2,11 +2,16 @@ package com.app.autoclicker.service
 
 import android.accessibilityservice.AccessibilityService
 import android.accessibilityservice.GestureDescription
+import android.app.Notification
+import android.app.NotificationChannel
+import android.app.NotificationManager
 import android.content.Intent
+import android.content.pm.ServiceInfo
 import android.graphics.Color
 import android.graphics.Path
 import android.graphics.PixelFormat
 import android.graphics.drawable.GradientDrawable
+import android.os.Build
 import android.os.Handler
 import android.os.Looper
 import android.view.Gravity
@@ -29,6 +34,8 @@ class AutoClickerService : AccessibilityService() {
 
     companion object {
         var instance: AutoClickerService? = null
+        private const val CHANNEL_ID = "quickclick_keepalive_channel"
+        private const val NOTIF_ID = 1001
     }
 
     private lateinit var windowManager: WindowManager
@@ -49,6 +56,46 @@ class AutoClickerService : AccessibilityService() {
         super.onServiceConnected()
         instance = this
         windowManager = getSystemService(WINDOW_SERVICE) as WindowManager
+        startKeepAliveForeground()
+    }
+
+    private fun startKeepAliveForeground() {
+        val manager = getSystemService(NOTIFICATION_SERVICE) as NotificationManager
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+            val channel = NotificationChannel(
+                CHANNEL_ID,
+                "QuickClick Service",
+                NotificationManager.IMPORTANCE_LOW
+            ).apply {
+                description = "Keeps QuickClick accessibility service running reliably"
+                setShowBadge(false)
+            }
+            manager.createNotificationChannel(channel)
+        }
+
+        val notifBuilder = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+            Notification.Builder(this, CHANNEL_ID)
+        } else {
+            @Suppress("DEPRECATION")
+            Notification.Builder(this)
+        }
+
+        val notification = notifBuilder
+            .setContentTitle("QuickClick Active")
+            .setContentText("Accessibility engine is running in background")
+            .setSmallIcon(android.R.drawable.ic_menu_compass)
+            .setOngoing(true)
+            .build()
+
+        try {
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.UPSIDE_DOWN_CAKE) {
+                startForeground(NOTIF_ID, notification, ServiceInfo.FOREGROUND_SERVICE_TYPE_SPECIAL_USE)
+            } else {
+                startForeground(NOTIF_ID, notification)
+            }
+        } catch (_: Exception) {
+            // Fallback if notification permission is not yet granted
+        }
     }
 
     override fun onAccessibilityEvent(event: AccessibilityEvent?) {
@@ -56,12 +103,10 @@ class AutoClickerService : AccessibilityService() {
             val pkg = event.packageName?.toString() ?: return
             if (pkg == packageName) return
 
-            // Fitur Auto Start: tampilkan overlay saat membuka app yang dicentang
             if (ConfigStore.autoStartPackages.contains(pkg) && controlBarView == null) {
                 Handler(Looper.getMainLooper()).post { showOverlay() }
             }
 
-            // Fitur Pause On App Change
             if (ConfigStore.activeConfig.pauseOnAppChange && isRunning && activeAppPackage != null && pkg != activeAppPackage) {
                 Handler(Looper.getMainLooper()).post {
                     stopClicking()
@@ -90,21 +135,19 @@ class AutoClickerService : AccessibilityService() {
         val bar = LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
             background = GradientDrawable().apply {
-                setColor(Color.parseColor("#E6EEEEEE"))
-                setStroke(3, Color.DKGRAY)
-                cornerRadius = 16f
+                setColor(Color.parseColor("#E61E1E24"))
+                setStroke(2, Color.parseColor("#3D3D4A"))
+                cornerRadius = 24f
             }
             setPadding(8, 12, 8, 12)
         }
 
-        // 1. Tombol Play / Pause / Waiting
         btnPlay = createBarButton("▶").apply {
             setOnClickListener {
                 if (isRunning || isWaitingSchedule) stopClicking() else startClickingFlow()
             }
         }
 
-        // 2. Tombol + (Tap: Click target, Hold: Swipe target)
         val btnAdd = createBarButton("+").apply {
             setOnClickListener { addTarget(isSwipe = false) }
             setOnLongClickListener {
@@ -113,7 +156,6 @@ class AutoClickerService : AccessibilityService() {
             }
         }
 
-        // 3. Tombol - (Tap: Hapus terakhir, Hold: Hapus semua)
         val btnRemove = createBarButton("−").apply {
             setOnClickListener { removeLastTarget() }
             setOnLongClickListener {
@@ -122,7 +164,6 @@ class AutoClickerService : AccessibilityService() {
             }
         }
 
-        // 4. Tombol Settings
         val btnSettings = createBarButton("⚙").apply {
             setOnClickListener {
                 val intent = Intent(this@AutoClickerService, SettingsActivity::class.java).apply {
@@ -132,7 +173,6 @@ class AutoClickerService : AccessibilityService() {
             }
         }
 
-        // 5. Tombol > (Tap: Collapse, Hold/Drag: Reposition)
         val btnCollapse = createBarButton(">").apply {
             var initialX = 0; var initialY = 0
             var initialTouchX = 0f; var initialTouchY = 0f
@@ -202,10 +242,10 @@ class AutoClickerService : AccessibilityService() {
     private fun createBarButton(symbol: String): TextView {
         return TextView(this).apply {
             text = symbol
-            textSize = 22f
-            setTextColor(Color.BLACK)
+            textSize = 20f
+            setTextColor(Color.WHITE)
             gravity = Gravity.CENTER
-            setPadding(20, 14, 20, 14)
+            setPadding(22, 14, 22, 14)
         }
     }
 
@@ -234,22 +274,22 @@ class AutoClickerService : AccessibilityService() {
             gravity = Gravity.CENTER
             background = GradientDrawable().apply {
                 shape = GradientDrawable.OVAL
-                setColor(if (isEndNode) Color.parseColor("#CCFF5722") else Color.parseColor("#CC2196F3"))
-                setStroke(4, Color.WHITE)
+                setColor(if (isEndNode) Color.parseColor("#CCFF5722") else Color.parseColor("#CC2979FF"))
+                setStroke(3, Color.WHITE)
             }
-            width = 100
-            height = 100
+            width = 96
+            height = 96
         }
 
         val params = WindowManager.LayoutParams(
-            100, 100,
+            96, 96,
             WindowManager.LayoutParams.TYPE_APPLICATION_OVERLAY,
             WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE,
             PixelFormat.TRANSLUCENT
         ).apply {
             gravity = Gravity.TOP or Gravity.START
-            x = (if (isEndNode) point.endX else point.x).toInt() - 50
-            y = (if (isEndNode) point.endY else point.y).toInt() - 50
+            x = (if (isEndNode) point.endX else point.x).toInt() - 48
+            y = (if (isEndNode) point.endY else point.y).toInt() - 48
         }
 
         var initX = 0; var initY = 0; var touchX = 0f; var touchY = 0f
@@ -265,11 +305,11 @@ class AutoClickerService : AccessibilityService() {
                     params.y = initY + (e.rawY - touchY).toInt()
                     windowManager.updateViewLayout(bubble, params)
                     if (isEndNode) {
-                        point.endX = params.x + 50f
-                        point.endY = params.y + 50f
+                        point.endX = params.x + 48f
+                        point.endY = params.y + 48f
                     } else {
-                        point.x = params.x + 50f
-                        point.y = params.y + 50f
+                        point.x = params.x + 48f
+                        point.y = params.y + 48f
                     }
                     true
                 }
@@ -299,27 +339,22 @@ class AutoClickerService : AccessibilityService() {
         targetViews.clear()
     }
 
-    // =========================================================================
-    // LOGIKA START SCHEDULE (PRESISI MILIDETIK) & LOOP EKSEKUSI
-    // =========================================================================
-
     private fun startClickingFlow() {
         val cfg = ConfigStore.activeConfig
         if (cfg.targets.isEmpty()) {
-            Toast.makeText(this, "Tambahkan minimal 1 target (+) dahulu", Toast.LENGTH_SHORT).show()
+            Toast.makeText(this, "Add at least 1 target (+) first", Toast.LENGTH_SHORT).show()
             return
         }
 
         clickJob?.cancel()
         clickJob = serviceScope.launch {
-            // 1. Cek apakah mode Start At Specific Time aktif
             if (cfg.startMode == StartMode.START_AT_SPECIFIC_TIME) {
                 isWaitingSchedule = true
                 withContext(Dispatchers.Main) {
                     btnPlay.text = "⏳"
                     Toast.makeText(
                         this@AutoClickerService,
-                        "Menunggu jam %02d:%02d:%02d.%03d".format(
+                        "Scheduled for %02d:%02d:%02d.%03d".format(
                             cfg.startAtHour, cfg.startAtMinute, cfg.startAtSecond, cfg.startAtMillis
                         ),
                         Toast.LENGTH_SHORT
@@ -330,25 +365,25 @@ class AutoClickerService : AccessibilityService() {
                     cfg.startAtHour, cfg.startAtMinute, cfg.startAtSecond, cfg.startAtMillis
                 )
 
-                // Hybrid wait: tidur efisien hingga H-25ms, lalu spin-wait untuk presisi ms
                 while (isActive) {
                     val remaining = targetEpoch - System.currentTimeMillis()
                     if (remaining <= 0) break
-                    if (remaining > 25) {
-                        delay(remaining - 20)
-                    }
+                    if (remaining > 25) delay(remaining - 20)
                 }
                 isWaitingSchedule = false
             }
 
             if (!isActive) return@launch
 
-            // 2. Mulai eksekusi klik
             isRunning = true
             withContext(Dispatchers.Main) {
                 btnPlay.text = "⏸"
-                if (!cfg.showActiveTargets) {
+                // Hide targets if Show Active Targets is disabled OR Ghost Anti-Detect is enabled
+                if (!cfg.showActiveTargets || cfg.ghostAntiDetect) {
                     targetViews.forEach { it.visibility = View.INVISIBLE }
+                }
+                if (cfg.ghostAntiDetect) {
+                    controlBarView?.alpha = 0.25f
                 }
             }
 
@@ -363,21 +398,28 @@ class AutoClickerService : AccessibilityService() {
                 for (target in cfg.targets.toList()) {
                     if (!isActive || !isRunning) break
 
+                    // Ghost Anti-Detect adds subtle timing jitter if enabled
+                    val ghostTimingJitter = if (cfg.ghostAntiDetect) Random.nextLong(3, 18) else 0L
+                    val ghostDurationJitter = if (cfg.ghostAntiDetect) Random.nextLong(5, 22) else 0L
+
                     val sDelay = (target.customStartDelayMs ?: cfg.startDelayMs) +
-                            if (cfg.startDelayRandomMs > 0) Random.nextLong(0, cfg.startDelayRandomMs + 1) else 0L
+                            (if (cfg.startDelayRandomMs > 0) Random.nextLong(0, cfg.startDelayRandomMs + 1) else 0L) +
+                            ghostTimingJitter
                     if (sDelay > 0) delay(sDelay)
 
-                    val duration = (target.customDurationMs ?: cfg.durationMs).coerceAtLeast(1L)
-                    performTargetGesture(target, duration, cfg.randomizationRadiusPx)
+                    val duration = ((target.customDurationMs ?: cfg.durationMs) + ghostDurationJitter).coerceAtLeast(1L)
+                    val effectiveRadius = if (cfg.ghostAntiDetect) maxOf(cfg.randomizationRadiusPx, 6) else cfg.randomizationRadiusPx
+
+                    performTargetGesture(target, duration, effectiveRadius, cfg.ghostAntiDetect)
 
                     val eDelay = (target.customEndDelayMs ?: cfg.endDelayMs) +
-                            if (cfg.endDelayRandomMs > 0) Random.nextLong(0, cfg.endDelayRandomMs + 1) else 0L
+                            (if (cfg.endDelayRandomMs > 0) Random.nextLong(0, cfg.endDelayRandomMs + 1) else 0L) +
+                            ghostTimingJitter
                     delay(duration + eDelay)
                 }
 
                 runCount++
 
-                // Cek kondisi Stop After
                 val shouldStop = when (cfg.stopMode) {
                     StopMode.INDEFINITE -> false
                     StopMode.AFTER_RUN_COUNT -> runCount >= cfg.stopAfterRunCount
@@ -396,6 +438,7 @@ class AutoClickerService : AccessibilityService() {
         isWaitingSchedule = false
         clickJob?.cancel()
         if (::btnPlay.isInitialized) btnPlay.text = "▶"
+        controlBarView?.alpha = 1.0f
         targetViews.forEach { it.visibility = if (isCollapsed) View.GONE else View.VISIBLE }
     }
 
@@ -407,20 +450,29 @@ class AutoClickerService : AccessibilityService() {
             set(Calendar.SECOND, second)
             set(Calendar.MILLISECOND, millis)
         }
-        // Jika waktu sudah lewat hari ini, jadwalkan untuk besok
         if (cal.timeInMillis <= now) {
             cal.add(Calendar.DAY_OF_YEAR, 1)
         }
         return cal.timeInMillis
     }
 
-    private fun performTargetGesture(target: TargetPoint, durationMs: Long, radiusPx: Int) {
+    private fun performTargetGesture(
+        target: TargetPoint,
+        durationMs: Long,
+        radiusPx: Int,
+        ghostMode: Boolean
+    ) {
         val (rx, ry) = applyRandomRadius(target.x, target.y, radiusPx)
         val path = Path().apply {
             moveTo(rx, ry)
             if (target.isSwipe) {
                 val (ex, ey) = applyRandomRadius(target.endX, target.endY, radiusPx)
                 lineTo(ex, ey)
+            } else if (ghostMode) {
+                // Micro finger drift (1-2px) to simulate natural human touch
+                val driftX = rx + Random.nextFloat() * 3f - 1.5f
+                val driftY = ry + Random.nextFloat() * 3f - 1.5f
+                lineTo(driftX, driftY)
             }
         }
         val stroke = GestureDescription.StrokeDescription(path, 0L, durationMs)
