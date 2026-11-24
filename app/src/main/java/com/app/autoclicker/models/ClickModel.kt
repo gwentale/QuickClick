@@ -35,7 +35,6 @@ data class TargetPoint(
 
 data class ClickConfig(
     var name: String = "Default",
-    // Default Settings
     var startDelayMs: Long = 0L,
     var startDelayRandomMs: Long = 0L,
     var endDelayMs: Long = 25L,
@@ -43,7 +42,7 @@ data class ClickConfig(
     var durationMs: Long = 25L,
     var durationUnit: TimeUnitType = TimeUnitType.MILLISECONDS,
 
-    // Fitur Baru: Start Schedule
+    // Start Schedule
     var startMode: StartMode = StartMode.IMMEDIATE,
     var startAtHour: Int = 12,
     var startAtMinute: Int = 0,
@@ -52,12 +51,13 @@ data class ClickConfig(
 
     // Stop After
     var stopMode: StopMode = StopMode.INDEFINITE,
-    var stopAfterTimeMs: Long = 120_000L, // 2 Menit
+    var stopAfterTimeMs: Long = 120_000L,
     var stopAtHour: Int = 12,
     var stopAtMinute: Int = 0,
     var stopAfterRunCount: Int = 50,
 
-    // Randomization & Advanced
+    // Randomization, Stealth & Advanced
+    var ghostAntiDetect: Boolean = false,
     var randomizationRadiusPx: Int = 0,
     var showActiveTargets: Boolean = true,
     var targetProgrammability: Boolean = true,
@@ -83,6 +83,7 @@ data class ClickConfig(
             put("stopAtHour", stopAtHour)
             put("stopAtMinute", stopAtMinute)
             put("stopAfterRunCount", stopAfterRunCount)
+            put("ghostAntiDetect", ghostAntiDetect)
             put("randomizationRadiusPx", randomizationRadiusPx)
             put("showActiveTargets", showActiveTargets)
             put("targetProgrammability", targetProgrammability)
@@ -104,4 +105,3 @@ object ConfigStore {
     var activeConfig: ClickConfig = ClickConfig()
     val autoStartPackages: MutableSet<String> = mutableSetOf()
 }
-  
