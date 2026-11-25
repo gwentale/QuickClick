@@ -1,6 +1,9 @@
 package com.app.autoclicker.ui
 
 import android.Manifest
+import android.content.ClipData
+import android.content.ClipboardManager
+import android.content.Context
 import android.content.Intent
 import android.content.pm.PackageManager
 import android.content.res.ColorStateList
@@ -31,7 +34,9 @@ import androidx.appcompat.app.AppCompatActivity
 import androidx.core.app.ActivityCompat
 import androidx.core.content.ContextCompat
 import com.app.autoclicker.R
+import com.app.autoclicker.models.ConfigStore
 import com.app.autoclicker.service.AutoClickerService
+import org.json.JSONArray
 
 class MainActivity : AppCompatActivity() {
 
@@ -41,12 +46,18 @@ class MainActivity : AppCompatActivity() {
     private var isAccessibilityDescExpanded = false
     private var isBatteryDescExpanded = false
 
+    companion object {
+        private const val GITHUB_REPO_URL = "https://github.com/gwentale/QuickClick"
+    }
+
     private fun Int.dp(): Int = (this * resources.displayMetrics.density).toInt()
     private fun Float.dpF(): Float = this * resources.displayMetrics.density
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         window.statusBarColor = Color.parseColor("#0F1115")
+
+        restoreAutoStartPackages()
 
         val scroll = ScrollView(this).apply {
             setBackgroundColor(Color.parseColor("#0F1115"))
@@ -67,6 +78,19 @@ class MainActivity : AppCompatActivity() {
     override fun onResume() {
         super.onResume()
         renderUI()
+    }
+
+    private fun restoreAutoStartPackages() {
+        val prefs = getSharedPreferences("quickclick_autostart", Context.MODE_PRIVATE)
+        val raw = prefs.getString("enabled_packages_order", null) ?: return
+        runCatching {
+            val arr = JSONArray(raw)
+            ConfigStore.autoStartPackages.clear()
+            for (i in 0 until arr.length()) {
+                val pkg = arr.getString(i)
+                if (pkg.isNotBlank()) ConfigStore.autoStartPackages.add(pkg)
+            }
+        }
     }
 
     private fun requestNotificationPermissionIfNeeded() {
@@ -103,6 +127,20 @@ class MainActivity : AppCompatActivity() {
             pInfo.versionName ?: "1.0.0"
         } catch (_: Exception) {
             "1.0.0"
+        }
+    }
+
+    private fun getAppVersionCode(): Long {
+        return try {
+            val pInfo = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+                packageManager.getPackageInfo(packageName, PackageManager.PackageInfoFlags.of(0))
+            } else {
+                @Suppress("DEPRECATION")
+                packageManager.getPackageInfo(packageName, 0)
+            }
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.P) pInfo.longVersionCode else @Suppress("DEPRECATION") pInfo.versionCode.toLong()
+        } catch (_: Exception) {
+            1L
         }
     }
 
@@ -229,20 +267,220 @@ class MainActivity : AppCompatActivity() {
         // Expandable & Collapsible Permission Details Section
         addPermissionDetailsSection()
 
-        // Bottom-Right App Version Footer
-        val tvVersion = TextView(this).apply {
-            text = "Version ${getAppVersionName()}"
-            textSize = 11.5f
-            setTypeface(null, Typeface.BOLD)
-            setTextColor(Color.parseColor("#6B7280"))
-            gravity = Gravity.END
-            setPadding(0, 14.dp(), 4.dp(), 4.dp())
+        // Bottom-Right Clickable Version Footer -> Opens About App Dialog
+        val footerRow = LinearLayout(this).apply {
+            orientation = LinearLayout.HORIZONTAL
+            gravity = Gravity.END or Gravity.CENTER_VERTICAL
+            setPadding(0, 12.dp(), 0, 4.dp())
             layoutParams = LinearLayout.LayoutParams(
                 LinearLayout.LayoutParams.MATCH_PARENT,
                 LinearLayout.LayoutParams.WRAP_CONTENT
             )
         }
-        rootContainer.addView(tvVersion)
+
+        val tvVersion = TextView(this).apply {
+            text = "Version ${getAppVersionName()}"
+            textSize = 11.5f
+            setTypeface(null, Typeface.BOLD)
+            setTextColor(Color.parseColor("#60A5FA"))
+            setPadding(10.dp(), 6.dp(), 10.dp(), 6.dp())
+            background = GradientDrawable().apply {
+                setColor(Color.parseColor("#141923"))
+                cornerRadius = 8f.dpF()
+                setStroke(1.dp(), Color.parseColor("#252C3A"))
+            }
+            setOnClickListener { showAboutAppDialog() }
+        }
+
+        footerRow.addView(tvVersion)
+        rootContainer.addView(footerRow)
+    }
+
+    private fun showAboutAppDialog() {
+        val content = LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
+            setPadding(20.dp(), 8.dp(), 20.dp(), 6.dp())
+        }
+
+        // App Header Badge inside Dialog
+        val headerBox = LinearLayout(this).apply {
+            orientation = LinearLayout.HORIZONTAL
+            gravity = Gravity.CENTER_VERTICAL
+            setPadding(12.dp(), 12.dp(), 12.dp(), 12.dp())
+            background = GradientDrawable().apply {
+                setColor(Color.parseColor("#12151C"))
+                cornerRadius = 12f.dpF()
+                setStroke(1.dp(), Color.parseColor("#282C37"))
+            }
+            layoutParams = LinearLayout.LayoutParams(
+                LinearLayout.LayoutParams.MATCH_PARENT,
+                LinearLayout.LayoutParams.WRAP_CONTENT
+            ).apply { bottomMargin = 12.dp() }
+        }
+
+        headerBox.addView(ImageView(this).apply {
+            setImageResource(R.drawable.ic_target)
+            imageTintList = ColorStateList.valueOf(Color.parseColor("#60A5FA"))
+            layoutParams = LinearLayout.LayoutParams(30.dp(), 30.dp()).apply { rightMargin = 12.dp() }
+        })
+
+        val titleCol = LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
+            layoutParams = LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f)
+            addView(TextView(context).apply {
+                text = "QuickClick"
+                textSize = 16.5f
+                setTypeface(null, Typeface.BOLD)
+                setTextColor(Color.WHITE)
+            })
+            addView(TextView(context).apply {
+                text = "Version ${getAppVersionName()} (Build ${getAppVersionCode()})"
+                textSize = 12f
+                setTextColor(Color.parseColor("#8A8F9E"))
+                setPadding(0, 2.dp(), 0, 0)
+            })
+        }
+        headerBox.addView(titleCol)
+        content.addView(headerBox)
+
+        // Brief Specifications Card
+        content.addView(TextView(this).apply {
+            text = "SPECIFICATIONS"
+            textSize = 11f
+            letterSpacing = 0.08f
+            setTypeface(null, Typeface.BOLD)
+            setTextColor(Color.parseColor("#60A5FA"))
+            setPadding(2.dp(), 0, 0, 6.dp())
+        })
+
+        val specsCard = LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
+            setPadding(12.dp(), 10.dp(), 12.dp(), 10.dp())
+            background = GradientDrawable().apply {
+                setColor(Color.parseColor("#12151C"))
+                cornerRadius = 12f.dpF()
+                setStroke(1.dp(), Color.parseColor("#282C37"))
+            }
+            layoutParams = LinearLayout.LayoutParams(
+                LinearLayout.LayoutParams.MATCH_PARENT,
+                LinearLayout.LayoutParams.WRAP_CONTENT
+            ).apply { bottomMargin = 12.dp() }
+        }
+
+        val specs = listOf(
+            "Engine" to "Android AccessibilityService & Floating Overlay",
+            "Modes" to "Multi-Target Tap & Swipe Sequencer",
+            "Scheduler" to "Exact Start/Stop Clock (Hour, Minute, Second)",
+            "Anti-Detect" to "Ghost Micro-Jitter, Touch Drift & Radius Offset",
+            "Backup" to "JSON Preset Save, Update, Export & Import"
+        )
+
+        specs.forEachIndexed { idx, (key, value) ->
+            val row = LinearLayout(this).apply {
+                orientation = LinearLayout.VERTICAL
+                setPadding(0, if (idx == 0) 0 else 5.dp(), 0, if (idx == specs.lastIndex) 0 else 5.dp())
+                addView(TextView(context).apply {
+                    text = key
+                    textSize = 11.5f
+                    setTypeface(null, Typeface.BOLD)
+                    setTextColor(Color.parseColor("#CBD5E1"))
+                })
+                addView(TextView(context).apply {
+                    text = value
+                    textSize = 12f
+                    setTextColor(Color.parseColor("#8A8F9E"))
+                })
+            }
+            specsCard.addView(row)
+        }
+        content.addView(specsCard)
+
+        // GitHub Source Code Section
+        content.addView(TextView(this).apply {
+            text = "SOURCE CODE"
+            textSize = 11f
+            letterSpacing = 0.08f
+            setTypeface(null, Typeface.BOLD)
+            setTextColor(Color.parseColor("#60A5FA"))
+            setPadding(2.dp(), 0, 0, 6.dp())
+        })
+
+        val repoCard = LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
+            setPadding(12.dp(), 10.dp(), 12.dp(), 10.dp())
+            background = GradientDrawable().apply {
+                setColor(Color.parseColor("#12151C"))
+                cornerRadius = 12f.dpF()
+                setStroke(1.dp(), Color.parseColor("#282C37"))
+            }
+            layoutParams = LinearLayout.LayoutParams(
+                LinearLayout.LayoutParams.MATCH_PARENT,
+                LinearLayout.LayoutParams.WRAP_CONTENT
+            )
+        }
+
+        repoCard.addView(TextView(this).apply {
+            text = GITHUB_REPO_URL
+            textSize = 12.5f
+            setTypeface(null, Typeface.BOLD)
+            setTextColor(Color.parseColor("#60A5FA"))
+            setPadding(0, 0, 0, 10.dp())
+        })
+
+        val btnRow = LinearLayout(this).apply {
+            orientation = LinearLayout.HORIZONTAL
+        }
+
+        val btnOpenGithub = TextView(this).apply {
+            text = "OPEN GITHUB"
+            textSize = 12f
+            setTypeface(null, Typeface.BOLD)
+            setTextColor(Color.WHITE)
+            gravity = Gravity.CENTER
+            setPadding(10.dp(), 9.dp(), 10.dp(), 9.dp())
+            background = GradientDrawable().apply {
+                setColor(Color.parseColor("#2979FF"))
+                cornerRadius = 8f.dpF()
+            }
+            layoutParams = LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f).apply {
+                rightMargin = 6.dp()
+            }
+            setOnClickListener {
+                runCatching {
+                    startActivity(Intent(Intent.ACTION_VIEW, Uri.parse(GITHUB_REPO_URL)))
+                }.onFailure {
+                    Toast.makeText(this@MainActivity, "No browser found", Toast.LENGTH_SHORT).show()
+                }
+            }
+        }
+
+        val btnCopyRepo = TextView(this).apply {
+            text = "COPY LINK"
+            textSize = 12f
+            setTypeface(null, Typeface.BOLD)
+            setTextColor(Color.parseColor("#34D399"))
+            gravity = Gravity.CENTER
+            setPadding(10.dp(), 9.dp(), 10.dp(), 9.dp())
+            background = GradientDrawable().apply {
+                setColor(Color.parseColor("#1A34D399"))
+                cornerRadius = 8f.dpF()
+            }
+            layoutParams = LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f).apply {
+                leftMargin = 6.dp()
+            }
+            setOnClickListener {
+                val cm = getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager
+                cm.setPrimaryClip(ClipData.newPlainText("QuickClick GitHub", GITHUB_REPO_URL))
+                Toast.makeText(this@MainActivity, "GitHub link copied", Toast.LENGTH_SHORT).show()
+            }
+        }
+
+        btnRow.addView(btnOpenGithub)
+        btnRow.addView(btnCopyRepo)
+        repoCard.addView(btnRow)
+        content.addView(repoCard)
+
+        DialogHelper.showStyledDialog(this, "About App", content, null, "CLOSE", false)
     }
 
     private fun addPermissionDetailsSection() {
