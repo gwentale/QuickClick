@@ -34,9 +34,14 @@ import com.app.autoclicker.ui.SettingsActivity
 import kotlinx.coroutines.*
 import java.util.Calendar
 import kotlin.coroutines.resume
+import kotlin.math.PI
 import kotlin.math.abs
 import kotlin.math.cos
+import kotlin.math.hypot
+import kotlin.math.ln
+import kotlin.math.roundToLong
 import kotlin.math.sin
+import kotlin.math.sqrt
 import kotlin.random.Random
 
 class AutoClickerService : AccessibilityService() {
@@ -64,6 +69,7 @@ class AutoClickerService : AccessibilityService() {
 
     private var isCollapsed = false
     private var activeAppPackage: String? = null
+    private var rhythmStepCounter = 0
 
     private fun Int.dp(): Int = (this * resources.displayMetrics.density).toInt()
     private fun Float.dpF(): Float = this * resources.displayMetrics.density
@@ -171,7 +177,7 @@ class AutoClickerService : AccessibilityService() {
             }
         }
 
-        // 4. Open Settings (⚙)
+        // 4. Open Settings
         val btnSettings = createBarVectorButton(R.drawable.ic_settings, Color.WHITE).apply {
             setOnClickListener {
                 if (isRunning) stopClicking()
@@ -190,7 +196,7 @@ class AutoClickerService : AccessibilityService() {
             }
         }
 
-        // 5. Close Floating Overlay (✕)
+        // 5. Close Floating Overlay
         val btnClose = createBarVectorButton(R.drawable.ic_close, Color.parseColor("#F87171")).apply {
             setOnClickListener {
                 stopClicking()
@@ -236,7 +242,6 @@ class AutoClickerService : AccessibilityService() {
             }
         }
 
-        // Order: Top Drag/Shrink/Expand (< / >), Play, Add, Remove, Settings, Close
         listOf(btnCollapse, btnPlay, btnAdd, btnRemove, btnSettings, btnClose).forEach { bar.addView(it) }
 
         controlBarParams = WindowManager.LayoutParams(
@@ -270,7 +275,6 @@ class AutoClickerService : AccessibilityService() {
         val vis = if (isCollapsed) View.GONE else View.VISIBLE
         views.forEach { it.visibility = vis }
         targetViews.forEach { it.visibility = vis }
-        // '>' = Expand (when collapsed), '<' = Shrink/Close (when expanded)
         btnCollapse.setImageResource(
             if (isCollapsed) R.drawable.ic_chevron_right else R.drawable.ic_chevron_left
         )
@@ -700,6 +704,10 @@ class AutoClickerService : AccessibilityService() {
         removeAllTargetViewsOnly()
     }
 
+    // =========================================================================
+    // EXECUTION LOOP: ENHANCED GHOST ANTI-DETECT & FLASH SALE SINGLE-BURST
+    // =========================================================================
+
     private fun startClickingFlow() {
         val cfg = ConfigStore.activeConfig
         if (cfg.targets.isEmpty()) {
@@ -707,17 +715,22 @@ class AutoClickerService : AccessibilityService() {
             return
         }
 
+        rhythmStepCounter = 0
         clickJob?.cancel()
         clickJob = serviceScope.launch {
+            val isBurstMode = cfg.flashSaleSingleBurst
+            val isGhostMode = cfg.ghostAntiDetect
+
             if (cfg.startMode == StartMode.START_AT_SPECIFIC_TIME) {
                 isWaitingSchedule = true
                 withContext(Dispatchers.Main) {
                     btnPlay.setImageResource(R.drawable.ic_clock)
                     btnPlay.imageTintList = ColorStateList.valueOf(Color.parseColor("#FBBF24"))
+                    val modeTag = if (isBurstMode) " [Flash Sale Single-Burst]" else ""
                     Toast.makeText(
                         this@AutoClickerService,
-                        "Scheduled for %02d:%02d:%02d".format(
-                            cfg.startAtHour, cfg.startAtMinute, cfg.startAtSecond
+                        "Armed for %02d:%02d:%02d%s".format(
+                            cfg.startAtHour, cfg.startAtMinute, cfg.startAtSecond, modeTag
                         ),
                         Toast.LENGTH_SHORT
                     ).show()
@@ -727,12 +740,14 @@ class AutoClickerService : AccessibilityService() {
                     cfg.startAtHour, cfg.startAtMinute, cfg.startAtSecond, cfg.startAtMillis
                 )
 
-                while (isActive && isWaitingSchedule) {
-                    val remaining = targetEpoch - System.currentTimeMillis()
-                    if (remaining <= 0) break
-                    if (remaining > 25) delay(remaining - 20)
-                }
+                awaitPrecisionEpoch(targetEpoch, highPrecisionLeadMs = if (isBurstMode) 140L else 35L)
                 isWaitingSchedule = false
+
+                // Subtle human trigger launch reaction (4-15 ms) when Ghost Anti-Detect is enabled
+                if (isActive && isGhostMode) {
+                    val launchJitter = gaussianClamped(mean = 9.0, stdDev = 3.0, minVal = 4.0, maxVal = 16.0).roundToLong()
+                    delay(launchJitter)
+                }
             }
 
             if (!isActive) return@launch
@@ -741,11 +756,11 @@ class AutoClickerService : AccessibilityService() {
             withContext(Dispatchers.Main) {
                 btnPlay.setImageResource(R.drawable.ic_pause)
                 btnPlay.imageTintList = ColorStateList.valueOf(Color.parseColor("#34D399"))
-                if (!cfg.showActiveTargets || cfg.ghostAntiDetect) {
+                if (!cfg.showActiveTargets || isGhostMode || isBurstMode) {
                     targetViews.forEach { it.visibility = View.INVISIBLE }
                 }
-                if (cfg.ghostAntiDetect) {
-                    controlBarView?.alpha = 0.45f
+                if (isGhostMode || isBurstMode) {
+                    controlBarView?.alpha = 0.35f
                 }
             }
 
@@ -766,15 +781,12 @@ class AutoClickerService : AccessibilityService() {
                     if (!isActive || !isRunning) break
                     if (!target.enabled) continue
 
+                    // Per-target Start At schedule
                     if (target.startAtEnabled && !perTargetScheduledDone.contains(target.id)) {
                         val tEpoch = computeTargetEpochMillis(
                             target.startAtHour, target.startAtMinute, target.startAtSecond, 0
                         )
-                        while (isActive && isRunning) {
-                            val rem = tEpoch - System.currentTimeMillis()
-                            if (rem <= 0) break
-                            if (rem > 25) delay(rem - 20)
-                        }
+                        awaitPrecisionEpoch(tEpoch, highPrecisionLeadMs = if (isBurstMode) 140L else 35L)
                         perTargetScheduledDone.add(target.id)
                         if (!isActive || !isRunning) break
                     }
@@ -783,34 +795,55 @@ class AutoClickerService : AccessibilityService() {
                     repeat(executionsInCycle) {
                         if (!isActive || !isRunning || !target.enabled) return@repeat
 
-                        val ghostTimingJitter = if (cfg.ghostAntiDetect) Random.nextLong(3, 18) else 0L
-                        val ghostDurationJitter = if (cfg.ghostAntiDetect) Random.nextLong(5, 22) else 0L
+                        rhythmStepCounter++
 
+                        // 1. Humanized Start Delay (Gaussian bell curve + subtle organic rhythm wave)
                         val baseStart = target.customStartDelayMs ?: cfg.startDelayMs
                         val randStart = target.customStartDelayRandomMs ?: cfg.startDelayRandomMs
-                        val sDelay = baseStart +
-                                (if (randStart > 0) Random.nextLong(0, randStart + 1) else 0L) +
-                                ghostTimingJitter
-                        if (sDelay > 0) delay(sDelay)
+                        val sDelay = computeHumanizedInterval(
+                            baseMs = baseStart,
+                            randomRangeMs = randStart,
+                            ghostMode = isGhostMode,
+                            addBaseMicroJitter = (baseStart > 0L)
+                        )
+                        if (sDelay > 0L) delay(sDelay)
                         if (!isActive || !isRunning) return@repeat
 
+                        // 2. Humanized Touch Hold / Swipe Duration (Gaussian distribution)
                         val baseDur = target.customDurationMs ?: cfg.durationMs
-                        val duration = (baseDur + ghostDurationJitter).coerceAtLeast(1L)
-                        val baseRad = target.customRandomizationRadiusPx ?: cfg.randomizationRadiusPx
-                        val effectiveRadius = if (cfg.ghostAntiDetect) maxOf(baseRad, 6) else baseRad
+                        val duration = computeHumanizedDuration(
+                            baseDurationMs = baseDur,
+                            isSwipe = target.isSwipe,
+                            ghostMode = isGhostMode
+                        )
 
-                        withTimeoutOrNull(duration + 400L) {
-                            performTargetGestureSuspend(target, duration, effectiveRadius, cfg.ghostAntiDetect)
+                        // 3. Humanized 2D Gaussian Scatter + Quadratic Bezier Micro-Drift
+                        val baseRad = target.customRandomizationRadiusPx ?: cfg.randomizationRadiusPx
+                        val effectiveRadius = if (isGhostMode) maxOf(baseRad, 7) else baseRad
+
+                        withTimeoutOrNull(duration + 450L) {
+                            performHumanizedGestureSuspend(target, duration, effectiveRadius, isGhostMode)
                         }
                         if (!isActive || !isRunning) return@repeat
 
+                        // 4. Humanized End Delay between sequential targets
                         val baseEnd = target.customEndDelayMs ?: cfg.endDelayMs
                         val randEnd = target.customEndDelayRandomMs ?: cfg.endDelayRandomMs
-                        val eDelay = baseEnd +
-                                (if (randEnd > 0) Random.nextLong(0, randEnd + 1) else 0L) +
-                                ghostTimingJitter
-                        delay(eDelay.coerceAtLeast(12L))
+                        val rawEndDelay = computeHumanizedInterval(
+                            baseMs = baseEnd,
+                            randomRangeMs = randEnd,
+                            ghostMode = isGhostMode,
+                            addBaseMicroJitter = true
+                        )
+                        // In Flash Sale Single-Burst + Ghost mode, enforce a safe human minimum cadence
+                        val minCadenceFloor = when {
+                            isBurstMode && isGhostMode -> 48L
+                            isGhostMode -> 24L
+                            else -> 12L
+                        }
+                        delay(rawEndDelay.coerceAtLeast(minCadenceFloor))
 
+                        // Per-target auto-disable counter
                         val runsDone = (perTargetRunCounts[target.id] ?: 0) + 1
                         perTargetRunCounts[target.id] = runsDone
                         if (target.disableAfterRuns > 0 && runsDone >= target.disableAfterRuns) {
@@ -822,6 +855,18 @@ class AutoClickerService : AccessibilityService() {
 
                 if (!isActive || !isRunning) break
                 totalCycles++
+
+                // Flash Sale Single-Burst Mode: stop strictly after 1 complete pass
+                if (isBurstMode) {
+                    withContext(Dispatchers.Main) {
+                        Toast.makeText(
+                            this@AutoClickerService,
+                            "Flash Sale single-burst completed (1 pass)",
+                            Toast.LENGTH_SHORT
+                        ).show()
+                    }
+                    break
+                }
 
                 val shouldStop = when (cfg.stopMode) {
                     StopMode.INDEFINITE -> false
@@ -849,6 +894,109 @@ class AutoClickerService : AccessibilityService() {
         targetViews.forEach { it.visibility = if (isCollapsed) View.GONE else View.VISIBLE }
     }
 
+    /**
+     * Hybrid scheduler wait: uses coroutine delay for the coarse interval and a short
+     * Thread.yield() spin window for sub-millisecond trigger accuracy on Flash Sale drops.
+     */
+    private suspend fun awaitPrecisionEpoch(targetEpoch: Long, highPrecisionLeadMs: Long) {
+        while (currentCoroutineContext().isActive && (isWaitingSchedule || isRunning)) {
+            val remaining = targetEpoch - System.currentTimeMillis()
+            if (remaining <= 0L) break
+            if (remaining > highPrecisionLeadMs) {
+                delay((remaining - (highPrecisionLeadMs - 10L)).coerceAtLeast(1L))
+            } else {
+                while (currentCoroutineContext().isActive &&
+                    (isWaitingSchedule || isRunning) &&
+                    System.currentTimeMillis() < targetEpoch
+                ) {
+                    Thread.yield()
+                }
+                break
+            }
+        }
+    }
+
+    // =========================================================================
+    // BIOMECHANICAL GAUSSIAN & BEZIER HUMANIZATION ENGINE
+    // =========================================================================
+
+    /**
+     * Standard normal variate N(0, 1) via Box-Muller transform.
+     */
+    private fun nextGaussian(): Double {
+        var u1 = Random.nextDouble()
+        while (u1 <= 1e-7) {
+            u1 = Random.nextDouble()
+        }
+        val u2 = Random.nextDouble()
+        return sqrt(-2.0 * ln(u1)) * cos(2.0 * PI * u2)
+    }
+
+    private fun gaussianClamped(mean: Double, stdDev: Double, minVal: Double, maxVal: Double): Double {
+        if (stdDev <= 0.0) return mean.coerceIn(minVal, maxVal)
+        val raw = mean + nextGaussian() * stdDev
+        return raw.coerceIn(minVal, maxVal)
+    }
+
+    /**
+     * Computes a human-like delay interval using Gaussian bell-curve distribution
+     * plus subtle sinusoidal rhythm drift so intervals never form a flat uniform signature.
+     */
+    private fun computeHumanizedInterval(
+        baseMs: Long,
+        randomRangeMs: Long,
+        ghostMode: Boolean,
+        addBaseMicroJitter: Boolean
+    ): Long {
+        if (!ghostMode) {
+            val uniformRand = if (randomRangeMs > 0L) Random.nextLong(0L, randomRangeMs + 1L) else 0L
+            return (baseMs + uniformRand).coerceAtLeast(0L)
+        }
+
+        val rangedOffset = if (randomRangeMs > 0L) {
+            gaussianClamped(
+                mean = randomRangeMs * 0.48,
+                stdDev = randomRangeMs * 0.24,
+                minVal = 0.0,
+                maxVal = randomRangeMs.toDouble()
+            ).roundToLong()
+        } else {
+            0L
+        }
+
+        val microJitter = if (addBaseMicroJitter) {
+            val waveDrift = sin(rhythmStepCounter * 0.65) * 3.5
+            gaussianClamped(
+                mean = 11.0 + waveDrift,
+                stdDev = 5.5,
+                minVal = 2.0,
+                maxVal = 28.0
+            ).roundToLong()
+        } else {
+            0L
+        }
+
+        return (baseMs + rangedOffset + microJitter).coerceAtLeast(0L)
+    }
+
+    /**
+     * Models natural human finger dwell time (contact duration) with a Gaussian curve.
+     */
+    private fun computeHumanizedDuration(
+        baseDurationMs: Long,
+        isSwipe: Boolean,
+        ghostMode: Boolean
+    ): Long {
+        if (!ghostMode) return baseDurationMs.coerceAtLeast(1L)
+
+        val jitter = if (isSwipe) {
+            gaussianClamped(mean = 18.0, stdDev = 9.0, minVal = 4.0, maxVal = 45.0).roundToLong()
+        } else {
+            gaussianClamped(mean = 14.0, stdDev = 6.5, minVal = 4.0, maxVal = 34.0).roundToLong()
+        }
+        return (baseDurationMs + jitter).coerceAtLeast(12L)
+    }
+
     private fun computeTargetEpochMillis(hour: Int, minute: Int, second: Int, millis: Int): Long {
         val now = System.currentTimeMillis()
         val cal = Calendar.getInstance().apply {
@@ -863,24 +1011,48 @@ class AutoClickerService : AccessibilityService() {
         return cal.timeInMillis
     }
 
-    private suspend fun performTargetGestureSuspend(
+    private suspend fun performHumanizedGestureSuspend(
         target: TargetPoint,
         durationMs: Long,
         radiusPx: Int,
         ghostMode: Boolean
     ) = suspendCancellableCoroutine { cont ->
-        val (rx, ry) = applyRandomRadius(target.x, target.y, radiusPx)
+        val (sx, sy) = applyHumanizedOffset(target.x, target.y, radiusPx, ghostMode)
         val path = Path().apply {
-            moveTo(rx, ry)
+            moveTo(sx, sy)
             if (target.isSwipe) {
-                val (ex, ey) = applyRandomRadius(target.endX, target.endY, radiusPx)
-                lineTo(ex, ey)
+                val (ex, ey) = applyHumanizedOffset(target.endX, target.endY, radiusPx, ghostMode)
+                if (ghostMode) {
+                    // Curved Quadratic Bezier swipe trajectory mimicking thumb/finger arc
+                    val dx = ex - sx
+                    val dy = ey - sy
+                    val dist = hypot(dx.toDouble(), dy.toDouble()).toFloat().coerceAtLeast(1f)
+                    val perpX = -dy / dist
+                    val perpY = dx / dist
+                    val maxArc = (dist * 0.08f).coerceIn(6f, 28f)
+                    val arcOffset = gaussianClamped(0.0, maxArc * 0.55, -maxArc.toDouble(), maxArc.toDouble()).toFloat()
+                    val t = gaussianClamped(0.50, 0.08, 0.35, 0.65).toFloat()
+                    val ctrlX = sx + dx * t + perpX * arcOffset
+                    val ctrlY = sy + dy * t + perpY * arcOffset
+                    quadTo(ctrlX, ctrlY, ex, ey)
+                } else {
+                    lineTo(ex, ey)
+                }
             } else if (ghostMode) {
-                val driftX = rx + Random.nextFloat() * 3f - 1.5f
-                val driftY = ry + Random.nextFloat() * 3f - 1.5f
-                lineTo(driftX, driftY)
+                // Curved Bezier micro-drift (1.2 - 4.2 px) simulating fingertip skin roll on glass
+                val driftAngle = Random.nextDouble(0.0, 2.0 * PI)
+                val driftDist = gaussianClamped(mean = 2.4, stdDev = 0.75, minVal = 1.1, maxVal = 4.3).toFloat()
+                val ex = sx + (driftDist * cos(driftAngle)).toFloat()
+                val ey = sy + (driftDist * sin(driftAngle)).toFloat()
+
+                val bowAngle = driftAngle + (if (Random.nextBoolean()) PI / 2.0 else -PI / 2.0)
+                val bowDist = driftDist * 0.45f
+                val ctrlX = (sx + ex) * 0.5f + (bowDist * cos(bowAngle)).toFloat()
+                val ctrlY = (sy + ey) * 0.5f + (bowDist * sin(bowAngle)).toFloat()
+                quadTo(ctrlX, ctrlY, ex, ey)
             }
         }
+
         val stroke = GestureDescription.StrokeDescription(path, 0L, durationMs)
         val gesture = GestureDescription.Builder().addStroke(stroke).build()
 
@@ -901,10 +1073,33 @@ class AutoClickerService : AccessibilityService() {
         }
     }
 
-    private fun applyRandomRadius(x: Float, y: Float, radius: Int): Pair<Float, Float> {
+    /**
+     * Generates a touch coordinate offset around (x, y).
+     * In Ghost mode, uses a 2D Gaussian distribution so touches cluster naturally near
+     * the button center with rare organic outliers inside [radius].
+     */
+    private fun applyHumanizedOffset(
+        x: Float,
+        y: Float,
+        radius: Int,
+        ghostMode: Boolean
+    ): Pair<Float, Float> {
         if (radius <= 0) return x to y
-        val angle = Random.nextDouble(0.0, 2 * Math.PI)
-        val r = Random.nextDouble(0.0, radius.toDouble())
-        return (x + (r * cos(angle)).toFloat()) to (y + (r * sin(angle)).toFloat())
+        return if (ghostMode) {
+            val sigma = radius / 2.2
+            val ox = gaussianClamped(0.0, sigma, -radius.toDouble(), radius.toDouble()).toFloat()
+            val oy = gaussianClamped(0.0, sigma, -radius.toDouble(), radius.toDouble()).toFloat()
+            val dist = hypot(ox.toDouble(), oy.toDouble()).toFloat()
+            if (dist > radius) {
+                val scale = radius / dist
+                (x + ox * scale) to (y + oy * scale)
+            } else {
+                (x + ox) to (y + oy)
+            }
+        } else {
+            val angle = Random.nextDouble(0.0, 2.0 * PI)
+            val r = Random.nextDouble(0.0, radius.toDouble())
+            (x + (r * cos(angle)).toFloat()) to (y + (r * sin(angle)).toFloat())
+        }
     }
 }
