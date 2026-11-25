@@ -158,6 +158,12 @@ class SettingsActivity : AppCompatActivity() {
             checked = cfg.ghostAntiDetect
         ) { cfg.ghostAntiDetect = it }
 
+        addSwitchCard(
+            title = "Single-Burst Mode",
+            description = "Executes exactly 1 rapid sequence pass at the scheduled time and stops immediately to prevent repetitive loop detection.",
+            checked = cfg.singleBurstMode
+        ) { cfg.singleBurstMode = it }
+
         addSectionHeader("DEFAULT SETTINGS")
         addSettingCard(
             title = "Start Delay",
