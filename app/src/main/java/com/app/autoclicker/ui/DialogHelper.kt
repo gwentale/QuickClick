@@ -13,6 +13,7 @@ import android.text.InputType
 import android.view.Gravity
 import android.view.MotionEvent
 import android.view.View
+import android.view.ViewGroup
 import android.view.WindowManager
 import android.view.inputmethod.EditorInfo
 import android.widget.EditText
@@ -74,9 +75,6 @@ object DialogHelper {
         }
     }
 
-    /**
-     * Padded dark EditText with clear spacing between text and bottom border line.
-     */
     fun createDarkEditText(ctx: Context, initialValue: String, centerText: Boolean = false): EditText {
         return EditText(ctx).apply {
             setText(initialValue)
@@ -340,9 +338,6 @@ object DialogHelper {
         }
     }
 
-    /**
-     * Analog & Digital Clock Picker with Hour, Minute, Second, and Vector Toggle Icons (No Emojis).
-     */
     fun showScheduleClockDialog(
         ctx: Context,
         title: String,
@@ -525,7 +520,6 @@ object DialogHelper {
         if (includeSeconds) manualRow.addView(etS)
         clockSection.addView(manualRow)
 
-        // Vector Icon Toggle (ic_keyboard <-> ic_clock, NO EMOJI)
         val toggleRow = LinearLayout(ctx).apply {
             orientation = LinearLayout.HORIZONTAL
             gravity = Gravity.START
@@ -567,8 +561,18 @@ object DialogHelper {
         clockSection.addView(toggleRow)
         layout.addView(clockSection)
 
+        fun setChildrenEnabled(view: View, enabled: Boolean) {
+            view.isEnabled = enabled
+            if (view is ViewGroup) {
+                for (i in 0 until view.childCount) {
+                    setChildrenEnabled(view.getChildAt(i), enabled)
+                }
+            }
+        }
+
         val updateEnabledState = { isSpecific: Boolean ->
             clockSection.alpha = if (isSpecific) 1.0f else 0.35f
+            setChildrenEnabled(clockSection, isSpecific)
         }
         updateEnabledState(!isImmediateInitial)
         rg.setOnCheckedChangeListener { _, checkedId ->
@@ -680,6 +684,7 @@ object DialogHelper {
         }
 
         override fun onTouchEvent(event: MotionEvent): Boolean {
+            if (!isEnabled) return false
             val cx = width / 2f
             val cy = height / 2f
             var deg = Math.toDegrees(atan2((event.y - cy).toDouble(), (event.x - cx).toDouble())) + 90.0
