@@ -705,7 +705,7 @@ class AutoClickerService : AccessibilityService() {
     }
 
     // =========================================================================
-    // EXECUTION LOOP: ENHANCED GHOST ANTI-DETECT & FLASH SALE SINGLE-BURST
+    // EXECUTION LOOP: ENHANCED GHOST ANTI-DETECT & SINGLE-BURST MODE
     // =========================================================================
 
     private fun startClickingFlow() {
@@ -718,7 +718,7 @@ class AutoClickerService : AccessibilityService() {
         rhythmStepCounter = 0
         clickJob?.cancel()
         clickJob = serviceScope.launch {
-            val isBurstMode = cfg.flashSaleSingleBurst
+            val isBurstMode = cfg.singleBurstMode
             val isGhostMode = cfg.ghostAntiDetect
 
             if (cfg.startMode == StartMode.START_AT_SPECIFIC_TIME) {
@@ -726,7 +726,7 @@ class AutoClickerService : AccessibilityService() {
                 withContext(Dispatchers.Main) {
                     btnPlay.setImageResource(R.drawable.ic_clock)
                     btnPlay.imageTintList = ColorStateList.valueOf(Color.parseColor("#FBBF24"))
-                    val modeTag = if (isBurstMode) " [Flash Sale Single-Burst]" else ""
+                    val modeTag = if (isBurstMode) " [Single-Burst]" else ""
                     Toast.makeText(
                         this@AutoClickerService,
                         "Armed for %02d:%02d:%02d%s".format(
@@ -835,7 +835,7 @@ class AutoClickerService : AccessibilityService() {
                             ghostMode = isGhostMode,
                             addBaseMicroJitter = true
                         )
-                        // In Flash Sale Single-Burst + Ghost mode, enforce a safe human minimum cadence
+                        // In Single-Burst + Ghost mode, enforce a safe human minimum cadence
                         val minCadenceFloor = when {
                             isBurstMode && isGhostMode -> 48L
                             isGhostMode -> 24L
@@ -856,12 +856,12 @@ class AutoClickerService : AccessibilityService() {
                 if (!isActive || !isRunning) break
                 totalCycles++
 
-                // Flash Sale Single-Burst Mode: stop strictly after 1 complete pass
+                // Single-Burst Mode: stop strictly after 1 complete pass
                 if (isBurstMode) {
                     withContext(Dispatchers.Main) {
                         Toast.makeText(
                             this@AutoClickerService,
-                            "Flash Sale single-burst completed (1 pass)",
+                            "Single-burst completed (1 pass)",
                             Toast.LENGTH_SHORT
                         ).show()
                     }
@@ -896,7 +896,7 @@ class AutoClickerService : AccessibilityService() {
 
     /**
      * Hybrid scheduler wait: uses coroutine delay for the coarse interval and a short
-     * Thread.yield() spin window for sub-millisecond trigger accuracy on Flash Sale drops.
+     * Thread.yield() spin window for sub-millisecond trigger accuracy on scheduled drops.
      */
     private suspend fun awaitPrecisionEpoch(targetEpoch: Long, highPrecisionLeadMs: Long) {
         while (currentCoroutineContext().isActive && (isWaitingSchedule || isRunning)) {
