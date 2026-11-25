@@ -67,7 +67,12 @@ jobs:
           DATE_SHORT=$(TZ="Asia/Jakarta" date +"%y%m%d")
           export APP_VERSION_NAME="${BASE_VERSION#v}"
           export APP_VERSION_CODE="${DATE_SHORT}${BUILD_NUM}"
-          echo "Building versionName=${APP_VERSION_NAME} | versionCode=${APP_VERSION_CODE}"
+          if [ "${GITHUB_REF_NAME}" = "dev" ]; then
+            export IS_DEV_BUILD="true"
+          else
+            export IS_DEV_BUILD="false"
+          fi
+          echo "Branch=${GITHUB_REF_NAME} | isDevBuild=${IS_DEV_BUILD} | versionName=${APP_VERSION_NAME} | versionCode=${APP_VERSION_CODE}"
           gradle clean assembleRelease --stacktrace
 
       - name: Clean up Release Keystore
@@ -121,9 +126,16 @@ jobs:
               gh release edit "$TAG_NAME" --title "QuickClick $TAG_NAME" --notes "$NOTES"
             fi
           else
-            gh release create "$TAG_NAME" "$APK_FILE" \
-              --title "QuickClick $TAG_NAME" \
-              --notes "$NOTES" \
-              --latest
+            if [ "${GITHUB_REF_NAME}" = "dev" ]; then
+              gh release create "$TAG_NAME" "$APK_FILE" \
+                --title "QuickClick $TAG_NAME" \
+                --notes "$NOTES" \
+                --prerelease
+            else
+              gh release create "$TAG_NAME" "$APK_FILE" \
+                --title "QuickClick $TAG_NAME" \
+                --notes "$NOTES" \
+                --latest
+            fi
           fi
           
