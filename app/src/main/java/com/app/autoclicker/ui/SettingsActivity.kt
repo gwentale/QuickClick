@@ -1,11 +1,15 @@
 package com.app.autoclicker.ui
 
+import android.content.ClipData
+import android.content.ClipboardManager
 import android.content.Context
 import android.content.res.ColorStateList
 import android.graphics.Color
 import android.graphics.Typeface
 import android.graphics.drawable.GradientDrawable
+import android.net.Uri
 import android.os.Bundle
+import android.text.InputType
 import android.text.TextUtils
 import android.view.Gravity
 import android.widget.EditText
@@ -15,18 +19,58 @@ import android.widget.RadioButton
 import android.widget.ScrollView
 import android.widget.TextView
 import android.widget.Toast
+import androidx.activity.result.contract.ActivityResultContracts
 import androidx.appcompat.app.AppCompatActivity
 import androidx.appcompat.widget.SwitchCompat
 import com.app.autoclicker.R
 import com.app.autoclicker.models.*
 import org.json.JSONArray
+import org.json.JSONObject
 
 class SettingsActivity : AppCompatActivity() {
 
     private lateinit var container: LinearLayout
+    private var pendingExportJson: String = ""
+    private var onImportCompletedCallback: (() -> Unit)? = null
 
     private fun Int.dp(): Int = (this * resources.displayMetrics.density).toInt()
     private fun Float.dpF(): Float = this * resources.displayMetrics.density
+
+    private val createDocumentLauncher = registerForActivityResult(
+        ActivityResultContracts.CreateDocument("application/json")
+    ) { uri: Uri? ->
+        if (uri != null && pendingExportJson.isNotEmpty()) {
+            try {
+                contentResolver.openOutputStream(uri)?.use { out ->
+                    out.write(pendingExportJson.toByteArray(Charsets.UTF_8))
+                }
+                Toast.makeText(this, "Exported successfully", Toast.LENGTH_SHORT).show()
+            } catch (e: Exception) {
+                Toast.makeText(this, "Export failed: ${e.message}", Toast.LENGTH_SHORT).show()
+            }
+        }
+    }
+
+    private val openDocumentLauncher = registerForActivityResult(
+        ActivityResultContracts.OpenDocument()
+    ) { uri: Uri? ->
+        if (uri != null) {
+            try {
+                val raw = contentResolver.openInputStream(uri)?.bufferedReader(Charsets.UTF_8)?.use {
+                    it.readText()
+                } ?: ""
+                if (importJsonData(raw)) {
+                    renderSettings()
+                    onImportCompletedCallback?.invoke()
+                    Toast.makeText(this, "Imported settings & configurations", Toast.LENGTH_SHORT).show()
+                } else {
+                    Toast.makeText(this, "Invalid configuration file format", Toast.LENGTH_SHORT).show()
+                }
+            } catch (e: Exception) {
+                Toast.makeText(this, "Import failed: ${e.message}", Toast.LENGTH_SHORT).show()
+            }
+        }
+    }
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -221,6 +265,9 @@ class SettingsActivity : AppCompatActivity() {
             checked = cfg.pauseOnAppChange
         ) { cfg.pauseOnAppChange = it }
 
+        addSectionHeader("CONFIGURATIONS & BACKUP")
+
+        // Manage Configurations Button
         val btnManage = LinearLayout(this).apply {
             orientation = LinearLayout.HORIZONTAL
             gravity = Gravity.CENTER
@@ -232,7 +279,7 @@ class SettingsActivity : AppCompatActivity() {
             layoutParams = LinearLayout.LayoutParams(
                 LinearLayout.LayoutParams.MATCH_PARENT,
                 LinearLayout.LayoutParams.WRAP_CONTENT
-            ).apply { topMargin = 10.dp() }
+            ).apply { bottomMargin = 8.dp() }
             setOnClickListener { showManageConfigurationsDialog() }
         }
         btnManage.addView(ImageView(this).apply {
@@ -247,7 +294,224 @@ class SettingsActivity : AppCompatActivity() {
             setTextColor(Color.WHITE)
         })
         container.addView(btnManage)
+
+        // Export / Import Settings & Configurations Row
+        val backupRow = LinearLayout(this).apply {
+            orientation = LinearLayout.HORIZONTAL
+            layoutParams = LinearLayout.LayoutParams(
+                LinearLayout.LayoutParams.MATCH_PARENT,
+                LinearLayout.LayoutParams.WRAP_CONTENT
+            )
+        }
+
+        val btnExport = createActionOutlineButton(R.drawable.ic_export, "EXPORT", "#60A5FA").apply {
+            layoutParams = LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f).apply {
+                rightMargin = 6.dp()
+            }
+            setOnClickListener {
+                showExportOptionsDialog(
+                    title = "Export Settings & Configurations",
+                    fileNamePrefix = "QuickClick_Backup",
+                    jsonPayload = buildFullBackupJson()
+                )
+            }
+        }
+
+        val btnImport = createActionOutlineButton(R.drawable.ic_import, "IMPORT", "#34D399").apply {
+            layoutParams = LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f).apply {
+                leftMargin = 6.dp()
+            }
+            setOnClickListener {
+                showImportOptionsDialog(onDone = null)
+            }
+        }
+
+        backupRow.addView(btnExport)
+        backupRow.addView(btnImport)
+        container.addView(backupRow)
     }
+
+    private fun createActionOutlineButton(iconRes: Int, label: String, accentHex: String): LinearLayout {
+        val accent = Color.parseColor(accentHex)
+        return LinearLayout(this).apply {
+            orientation = LinearLayout.HORIZONTAL
+            gravity = Gravity.CENTER
+            setPadding(14.dp(), 13.dp(), 14.dp(), 13.dp())
+            background = GradientDrawable().apply {
+                setColor(Color.parseColor("#1A1D24"))
+                cornerRadius = 12f.dpF()
+                setStroke(1.dp(), Color.parseColor("#2E3444"))
+            }
+            addView(ImageView(context).apply {
+                setImageResource(iconRes)
+                imageTintList = ColorStateList.valueOf(accent)
+                layoutParams = LinearLayout.LayoutParams(18.dp(), 18.dp()).apply { rightMargin = 8.dp() }
+            })
+            addView(TextView(context).apply {
+                text = label
+                textSize = 13.5f
+                setTypeface(null, Typeface.BOLD)
+                setTextColor(accent)
+            })
+        }
+    }
+
+    // =========================================================================
+    // EXPORT & IMPORT LOGIC (FILE + CLIPBOARD JSON)
+    // =========================================================================
+
+    private fun buildFullBackupJson(): String {
+        val prefs = getSharedPreferences("quickclick_presets", Context.MODE_PRIVATE)
+        val presetsArr = JSONArray(prefs.getString("presets_list", "[]"))
+        val pkgArr = JSONArray().apply {
+            ConfigStore.autoStartPackages.forEach { put(it) }
+        }
+        return JSONObject().apply {
+            put("format", "QuickClickBackup")
+            put("version", 1)
+            put("activeConfig", JSONObject(ConfigStore.activeConfig.toJson()))
+            put("savedPresets", presetsArr)
+            put("autoStartPackages", pkgArr)
+        }.toString(2)
+    }
+
+    private fun importJsonData(raw: String): Boolean {
+        val trimmed = raw.trim()
+        if (trimmed.isEmpty()) return false
+        return try {
+            val obj = JSONObject(trimmed)
+            val prefs = getSharedPreferences("quickclick_presets", Context.MODE_PRIVATE)
+
+            if (obj.optString("format") == "QuickClickBackup") {
+                // Full backup (active settings + all saved presets + auto-open packages)
+                if (obj.has("activeConfig")) {
+                    ConfigStore.activeConfig = ClickConfig.fromJson(obj.getJSONObject("activeConfig").toString())
+                }
+                if (obj.has("savedPresets")) {
+                    val incomingPresets = obj.getJSONArray("savedPresets")
+                    val existingPresets = JSONArray(prefs.getString("presets_list", "[]"))
+                    for (i in 0 until incomingPresets.length()) {
+                        val presetStr = incomingPresets.getString(i)
+                        // Validate before adding
+                        ClickConfig.fromJson(presetStr)
+                        existingPresets.put(presetStr)
+                    }
+                    prefs.edit().putString("presets_list", existingPresets.toString()).apply()
+                }
+                if (obj.has("autoStartPackages")) {
+                    val pkgs = obj.getJSONArray("autoStartPackages")
+                    for (i in 0 until pkgs.length()) {
+                        ConfigStore.autoStartPackages.add(pkgs.getString(i))
+                    }
+                }
+                true
+            } else {
+                // Single ClickConfig JSON
+                val importedCfg = ClickConfig.fromJson(trimmed)
+                ConfigStore.activeConfig = importedCfg
+                val existingPresets = JSONArray(prefs.getString("presets_list", "[]"))
+                existingPresets.put(importedCfg.toJson())
+                prefs.edit().putString("presets_list", existingPresets.toString()).apply()
+                true
+            }
+        } catch (_: Exception) {
+            false
+        }
+    }
+
+    private fun showExportOptionsDialog(title: String, fileNamePrefix: String, jsonPayload: String) {
+        val layout = DialogHelper.createDarkDialogContent(
+            this,
+            "Save as a .json file or copy the JSON text to clipboard."
+        )
+
+        val btnFile = createActionOutlineButton(R.drawable.ic_export, "SAVE TO .JSON FILE", "#60A5FA").apply {
+            layoutParams = LinearLayout.LayoutParams(
+                LinearLayout.LayoutParams.MATCH_PARENT,
+                LinearLayout.LayoutParams.WRAP_CONTENT
+            ).apply { bottomMargin = 10.dp() }
+            setOnClickListener {
+                pendingExportJson = jsonPayload
+                val safeName = fileNamePrefix.replace(Regex("[^a-zA-Z0-9_-]"), "_")
+                createDocumentLauncher.launch("${safeName}_${System.currentTimeMillis() / 1000}.json")
+            }
+        }
+
+        val btnCopy = createActionOutlineButton(R.drawable.ic_folder, "COPY JSON TO CLIPBOARD", "#34D399").apply {
+            layoutParams = LinearLayout.LayoutParams(
+                LinearLayout.LayoutParams.MATCH_PARENT,
+                LinearLayout.LayoutParams.WRAP_CONTENT
+            )
+            setOnClickListener {
+                val cm = getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager
+                cm.setPrimaryClip(ClipData.newPlainText("QuickClick JSON", jsonPayload))
+                Toast.makeText(this@SettingsActivity, "JSON copied to clipboard", Toast.LENGTH_SHORT).show()
+            }
+        }
+
+        layout.addView(btnFile)
+        layout.addView(btnCopy)
+        DialogHelper.showStyledDialog(this, title, layout, null, "CLOSE", false)
+    }
+
+    private fun showImportOptionsDialog(onDone: (() -> Unit)?) {
+        val layout = DialogHelper.createDarkDialogContent(
+            this,
+            "Select a .json backup file from storage or paste JSON data below."
+        )
+
+        val btnPickFile = createActionOutlineButton(R.drawable.ic_import, "SELECT .JSON FILE", "#34D399").apply {
+            layoutParams = LinearLayout.LayoutParams(
+                LinearLayout.LayoutParams.MATCH_PARENT,
+                LinearLayout.LayoutParams.WRAP_CONTENT
+            ).apply { bottomMargin = 12.dp() }
+            setOnClickListener {
+                onImportCompletedCallback = onDone
+                openDocumentLauncher.launch(arrayOf("application/json", "text/plain", "*/*"))
+            }
+        }
+        layout.addView(btnPickFile)
+
+        layout.addView(TextView(this).apply {
+            text = "Or paste JSON text:"
+            textSize = 12f
+            setTypeface(null, Typeface.BOLD)
+            setTextColor(Color.parseColor("#8A8F9E"))
+            setPadding(0, 0, 0, 6.dp())
+        })
+
+        val etJson = EditText(this).apply {
+            hint = "{\"format\":\"QuickClickBackup\", ...}"
+            setHintTextColor(Color.parseColor("#6B7280"))
+            setTextColor(Color.WHITE)
+            textSize = 12.5f
+            minLines = 3
+            maxLines = 5
+            inputType = InputType.TYPE_CLASS_TEXT or InputType.TYPE_TEXT_FLAG_MULTI_LINE
+            setPadding(12.dp(), 10.dp(), 12.dp(), 12.dp())
+            background = GradientDrawable().apply {
+                setColor(Color.parseColor("#12151C"))
+                cornerRadius = 10f.dpF()
+                setStroke(1.dp(), Color.parseColor("#3B4254"))
+            }
+        }
+        layout.addView(etJson)
+
+        DialogHelper.showStyledDialog(this, "Import Settings & Configurations", layout, "IMPORT JSON", "CANCEL", false) {
+            val pasted = etJson.text.toString()
+            if (importJsonData(pasted)) {
+                renderSettings()
+                onDone?.invoke()
+                Toast.makeText(this, "Imported successfully", Toast.LENGTH_SHORT).show()
+            } else {
+                Toast.makeText(this, "Invalid JSON data", Toast.LENGTH_SHORT).show()
+            }
+        }
+    }
+
+    // =========================================================================
+    // STOP AFTER DIALOG
+    // =========================================================================
 
     private fun showStopAfterDialog() {
         val cfg = ConfigStore.activeConfig
@@ -394,17 +658,21 @@ class SettingsActivity : AppCompatActivity() {
         }
     }
 
+    // =========================================================================
+    // MANAGE CONFIGURATIONS DIALOG (WITH UPDATE, LOAD, EXPORT, IMPORT)
+    // =========================================================================
+
     private fun showManageConfigurationsDialog() {
         val prefs = getSharedPreferences("quickclick_presets", Context.MODE_PRIVATE)
         val layout = DialogHelper.createDarkDialogContent(
             this,
-            "Save current targets & settings as a preset, update an existing preset, or load one."
+            "Save, update, load, or export/import configuration presets."
         )
 
         val saveRow = LinearLayout(this).apply {
             orientation = LinearLayout.HORIZONTAL
             gravity = Gravity.CENTER_VERTICAL
-            setPadding(0, 4.dp(), 0, 12.dp())
+            setPadding(0, 4.dp(), 0, 10.dp())
         }
         val etName = EditText(this).apply {
             hint = "Configuration name..."
@@ -445,7 +713,7 @@ class SettingsActivity : AppCompatActivity() {
                     text = "No saved configurations yet."
                     textSize = 13f
                     setTextColor(Color.parseColor("#6B7280"))
-                    setPadding(0, 6.dp(), 0, 6.dp())
+                    setPadding(0, 6.dp(), 0, 8.dp())
                 })
                 return
             }
@@ -455,7 +723,7 @@ class SettingsActivity : AppCompatActivity() {
                 val itemCard = LinearLayout(this).apply {
                     orientation = LinearLayout.HORIZONTAL
                     gravity = Gravity.CENTER_VERTICAL
-                    setPadding(12.dp(), 10.dp(), 8.dp(), 10.dp())
+                    setPadding(10.dp(), 9.dp(), 6.dp(), 9.dp())
                     background = GradientDrawable().apply {
                         setColor(Color.parseColor("#12151C"))
                         cornerRadius = 10f.dpF()
@@ -465,25 +733,25 @@ class SettingsActivity : AppCompatActivity() {
                 }
 
                 val tvTitle = TextView(this).apply {
-                    text = "${parsed.name} (${parsed.targets.size} targets)"
-                    textSize = 13.5f
+                    text = "${parsed.name} (${parsed.targets.size})"
+                    textSize = 13f
                     maxLines = 2
                     ellipsize = TextUtils.TruncateAt.END
                     setTextColor(Color.WHITE)
-                    layoutParams = LinearLayout.LayoutParams(0, -2, 1f).apply { rightMargin = 6.dp() }
+                    layoutParams = LinearLayout.LayoutParams(0, -2, 1f).apply { rightMargin = 4.dp() }
                 }
 
                 val btnUpdate = TextView(this).apply {
                     text = "UPDATE"
-                    textSize = 11.5f
+                    textSize = 11f
                     setTypeface(null, Typeface.BOLD)
                     setTextColor(Color.parseColor("#60A5FA"))
-                    setPadding(8.dp(), 5.dp(), 8.dp(), 5.dp())
+                    setPadding(6.dp(), 5.dp(), 6.dp(), 5.dp())
                     background = GradientDrawable().apply {
                         setColor(Color.parseColor("#1A2979FF"))
                         cornerRadius = 6f.dpF()
                     }
-                    layoutParams = LinearLayout.LayoutParams(-2, -2).apply { rightMargin = 6.dp() }
+                    layoutParams = LinearLayout.LayoutParams(-2, -2).apply { rightMargin = 4.dp() }
                     setOnClickListener {
                         ConfigStore.activeConfig.name = parsed.name
                         val updatedArr = JSONArray(prefs.getString("presets_list", "[]"))
@@ -502,10 +770,10 @@ class SettingsActivity : AppCompatActivity() {
 
                 val btnLoad = TextView(this).apply {
                     text = "LOAD"
-                    textSize = 11.5f
+                    textSize = 11f
                     setTypeface(null, Typeface.BOLD)
                     setTextColor(Color.parseColor("#34D399"))
-                    setPadding(8.dp(), 5.dp(), 8.dp(), 5.dp())
+                    setPadding(6.dp(), 5.dp(), 6.dp(), 5.dp())
                     background = GradientDrawable().apply {
                         setColor(Color.parseColor("#1A34D399"))
                         cornerRadius = 6f.dpF()
@@ -518,11 +786,25 @@ class SettingsActivity : AppCompatActivity() {
                     }
                 }
 
+                val ivExportItem = ImageView(this).apply {
+                    setImageResource(R.drawable.ic_export)
+                    imageTintList = ColorStateList.valueOf(Color.parseColor("#FBBF24"))
+                    setPadding(4.dp(), 4.dp(), 4.dp(), 4.dp())
+                    layoutParams = LinearLayout.LayoutParams(22.dp(), 22.dp()).apply { rightMargin = 2.dp() }
+                    setOnClickListener {
+                        showExportOptionsDialog(
+                            title = "Export: ${parsed.name}",
+                            fileNamePrefix = parsed.name,
+                            jsonPayload = JSONObject(jsonStr).toString(2)
+                        )
+                    }
+                }
+
                 val ivDel = ImageView(this).apply {
                     setImageResource(R.drawable.ic_close)
                     imageTintList = ColorStateList.valueOf(Color.parseColor("#F87171"))
                     setPadding(4.dp(), 4.dp(), 4.dp(), 4.dp())
-                    layoutParams = LinearLayout.LayoutParams(24.dp(), 24.dp())
+                    layoutParams = LinearLayout.LayoutParams(22.dp(), 22.dp())
                     setOnClickListener {
                         val updated = JSONArray()
                         for (j in 0 until arr.length()) if (j != i) updated.put(arr.getString(j))
@@ -534,6 +816,7 @@ class SettingsActivity : AppCompatActivity() {
                 itemCard.addView(tvTitle)
                 itemCard.addView(btnUpdate)
                 itemCard.addView(btnLoad)
+                itemCard.addView(ivExportItem)
                 itemCard.addView(ivDel)
                 listBox.addView(itemCard)
             }
@@ -551,6 +834,32 @@ class SettingsActivity : AppCompatActivity() {
         }
 
         refreshPresets()
+
+        // Bottom Export All / Import Bar inside Manage Configurations
+        val presetTransferRow = LinearLayout(this).apply {
+            orientation = LinearLayout.HORIZONTAL
+            setPadding(0, 6.dp(), 0, 0)
+        }
+        val btnExportAll = createActionOutlineButton(R.drawable.ic_export, "EXPORT ALL", "#60A5FA").apply {
+            layoutParams = LinearLayout.LayoutParams(0, -2, 1f).apply { rightMargin = 6.dp() }
+            setOnClickListener {
+                showExportOptionsDialog(
+                    title = "Export All Configurations",
+                    fileNamePrefix = "QuickClick_Configs",
+                    jsonPayload = buildFullBackupJson()
+                )
+            }
+        }
+        val btnImportPreset = createActionOutlineButton(R.drawable.ic_import, "IMPORT", "#34D399").apply {
+            layoutParams = LinearLayout.LayoutParams(0, -2, 1f).apply { leftMargin = 6.dp() }
+            setOnClickListener {
+                showImportOptionsDialog { refreshPresets() }
+            }
+        }
+        presetTransferRow.addView(btnExportAll)
+        presetTransferRow.addView(btnImportPreset)
+        layout.addView(presetTransferRow)
+
         DialogHelper.showStyledDialog(this, "Manage Configurations", layout, "DONE", "CLOSE", false) {}
     }
 
