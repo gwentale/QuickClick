@@ -51,7 +51,6 @@ class MainActivity : AppCompatActivity() {
         private const val AUTHOR_HANDLE = "@gwentale"
         private const val GITHUB_PROFILE_URL = "https://github.com/gwentale"
         private const val GITHUB_REPO_URL = "https://github.com/gwentale/QuickClick"
-        private const val SIMPLEHAT_APKPURE_URL = "https://apkpure.com/quicktouch-automatic-clicker/com.simplehat.clicker"
     }
 
     private fun Int.dp(): Int = (this * resources.displayMetrics.density).toInt()
@@ -468,7 +467,7 @@ class MainActivity : AppCompatActivity() {
         }
         content.addView(specsCard)
 
-        // GitHub Source Code Section
+        // GitHub Source Code Section (Clean Vector Icon + App Name Link + Mini Copy Button)
         content.addView(TextView(this).apply {
             text = "SOURCE CODE"
             textSize = 11f
@@ -479,85 +478,8 @@ class MainActivity : AppCompatActivity() {
         })
 
         val repoCard = LinearLayout(this).apply {
-            orientation = LinearLayout.VERTICAL
-            setPadding(12.dp(), 10.dp(), 12.dp(), 10.dp())
-            background = GradientDrawable().apply {
-                setColor(Color.parseColor("#12151C"))
-                cornerRadius = 12f.dpF()
-                setStroke(1.dp(), Color.parseColor("#282C37"))
-            }
-            layoutParams = LinearLayout.LayoutParams(
-                LinearLayout.LayoutParams.MATCH_PARENT,
-                LinearLayout.LayoutParams.WRAP_CONTENT
-            ).apply { bottomMargin = 12.dp() }
-        }
-
-        repoCard.addView(TextView(this).apply {
-            text = GITHUB_REPO_URL
-            textSize = 12.5f
-            setTypeface(null, Typeface.BOLD)
-            setTextColor(Color.parseColor("#60A5FA"))
-            setPadding(0, 0, 0, 10.dp())
-        })
-
-        val btnRow = LinearLayout(this).apply {
             orientation = LinearLayout.HORIZONTAL
-        }
-
-        val btnOpenGithub = TextView(this).apply {
-            text = "OPEN GITHUB"
-            textSize = 12f
-            setTypeface(null, Typeface.BOLD)
-            setTextColor(Color.WHITE)
-            gravity = Gravity.CENTER
-            setPadding(10.dp(), 9.dp(), 10.dp(), 9.dp())
-            background = GradientDrawable().apply {
-                setColor(Color.parseColor("#2979FF"))
-                cornerRadius = 8f.dpF()
-            }
-            layoutParams = LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f).apply {
-                rightMargin = 6.dp()
-            }
-            setOnClickListener { openExternalUrl(GITHUB_REPO_URL) }
-        }
-
-        val btnCopyRepo = TextView(this).apply {
-            text = "COPY LINK"
-            textSize = 12f
-            setTypeface(null, Typeface.BOLD)
-            setTextColor(Color.parseColor("#34D399"))
-            gravity = Gravity.CENTER
-            setPadding(10.dp(), 9.dp(), 10.dp(), 9.dp())
-            background = GradientDrawable().apply {
-                setColor(Color.parseColor("#1A34D399"))
-                cornerRadius = 8f.dpF()
-            }
-            layoutParams = LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f).apply {
-                leftMargin = 6.dp()
-            }
-            setOnClickListener {
-                copyTextToClipboard("QuickClick GitHub", GITHUB_REPO_URL, "GitHub link copied")
-            }
-        }
-
-        btnRow.addView(btnOpenGithub)
-        btnRow.addView(btnCopyRepo)
-        repoCard.addView(btnRow)
-        content.addView(repoCard)
-
-        // Inspired by SimpleHat + APKPure Link Section
-        content.addView(TextView(this).apply {
-            text = "CREDITS"
-            textSize = 11f
-            letterSpacing = 0.08f
-            setTypeface(null, Typeface.BOLD)
-            setTextColor(Color.parseColor("#60A5FA"))
-            setPadding(2.dp(), 0, 0, 6.dp())
-        })
-
-        val creditCard = LinearLayout(this).apply {
-            orientation = LinearLayout.VERTICAL
-            setPadding(12.dp(), 10.dp(), 12.dp(), 10.dp())
+            gravity = Gravity.CENTER_VERTICAL
             background = GradientDrawable().apply {
                 setColor(Color.parseColor("#12151C"))
                 cornerRadius = 12f.dpF()
@@ -567,24 +489,49 @@ class MainActivity : AppCompatActivity() {
                 LinearLayout.LayoutParams.MATCH_PARENT,
                 LinearLayout.LayoutParams.WRAP_CONTENT
             )
-            setOnClickListener { openExternalUrl(SIMPLEHAT_APKPURE_URL) }
         }
 
-        creditCard.addView(TextView(this).apply {
-            text = "Inspired by SimpleHat"
-            textSize = 12.5f
-            setTypeface(null, Typeface.BOLD)
-            setTextColor(Color.parseColor("#E2E8F0"))
-            setPadding(0, 0, 0, 3.dp())
-        })
+        val repoLinkArea = LinearLayout(this).apply {
+            orientation = LinearLayout.HORIZONTAL
+            gravity = Gravity.CENTER_VERTICAL
+            setPadding(12.dp(), 11.dp(), 10.dp(), 11.dp())
+            layoutParams = LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f)
+            setOnClickListener { openExternalUrl(GITHUB_REPO_URL) }
+            setOnLongClickListener {
+                copyTextToClipboard("QuickClick GitHub", GITHUB_REPO_URL, "GitHub link copied")
+                true
+            }
+            addView(ImageView(context).apply {
+                setImageResource(R.drawable.ic_github)
+                imageTintList = ColorStateList.valueOf(Color.parseColor("#E2E8F0"))
+                layoutParams = LinearLayout.LayoutParams(18.dp(), 18.dp()).apply { rightMargin = 10.dp() }
+            })
+            addView(TextView(context).apply {
+                text = this@MainActivity.getString(R.string.app_name)
+                textSize = 14f
+                setTypeface(null, Typeface.BOLD)
+                setTextColor(Color.parseColor("#E2E8F0"))
+            })
+        }
 
-        creditCard.addView(TextView(this).apply {
-            text = SIMPLEHAT_APKPURE_URL
-            textSize = 11.5f
-            setTextColor(Color.parseColor("#60A5FA"))
-        })
+        val repoDivider = View(this).apply {
+            setBackgroundColor(Color.parseColor("#282C37"))
+            layoutParams = LinearLayout.LayoutParams(1.dp(), 22.dp())
+        }
 
-        content.addView(creditCard)
+        val btnCopyRepo = ImageView(this).apply {
+            setImageDrawable(createCopyDrawable(Color.parseColor("#94A3B8")))
+            setPadding(11.dp(), 11.dp(), 12.dp(), 11.dp())
+            layoutParams = LinearLayout.LayoutParams(40.dp(), 40.dp())
+            setOnClickListener {
+                copyTextToClipboard("QuickClick GitHub", GITHUB_REPO_URL, "GitHub link copied")
+            }
+        }
+
+        repoCard.addView(repoLinkArea)
+        repoCard.addView(repoDivider)
+        repoCard.addView(btnCopyRepo)
+        content.addView(repoCard)
 
         DialogHelper.showStyledDialog(this, "About App", content, null, "CLOSE", false)
     }
