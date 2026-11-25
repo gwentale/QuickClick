@@ -751,7 +751,7 @@ class AutoClickerService : AccessibilityService() {
 
             val startTimeMs = System.currentTimeMillis()
             val stopAtEpoch = if (cfg.stopMode == StopMode.AT_SPECIFIC_TIME) {
-                computeTargetEpochMillis(cfg.stopAtHour, cfg.stopAtMinute, 0, 0)
+                computeTargetEpochMillis(cfg.stopAtHour, cfg.stopAtMinute, cfg.stopAtSecond, 0)
             } else Long.MAX_VALUE
 
             val perTargetRunCounts = mutableMapOf<Int, Int>()
