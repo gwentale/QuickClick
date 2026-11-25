@@ -25,8 +25,7 @@
 
         <activity
             android:name=".ui.AutoStartActivity"
-            android:label="Auto Start Apps"
-            android:theme="@style/Theme.MaterialComponents.DayNight.DarkActionBar" />
+            android:label="Auto-Open Settings" />
 
         <service
             android:name=".service.AutoClickerService"
