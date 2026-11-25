@@ -7,14 +7,22 @@ import android.graphics.Paint
 import android.graphics.Typeface
 import android.graphics.drawable.GradientDrawable
 import android.os.Bundle
+import android.text.Layout
+import android.text.StaticLayout
+import android.text.TextPaint
 import android.view.Gravity
 import android.view.View
+import android.widget.FrameLayout
 import android.widget.LinearLayout
 import android.widget.ScrollView
 import android.widget.TextView
+import android.widget.Toast
 import androidx.appcompat.app.AppCompatActivity
 
 class InstructionsActivity : AppCompatActivity() {
+
+    private fun Int.dp(): Int = (this * resources.displayMetrics.density).toInt()
+    private fun Float.dpF(): Float = this * resources.displayMetrics.density
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -29,18 +37,18 @@ class InstructionsActivity : AppCompatActivity() {
         val topBar = LinearLayout(this).apply {
             orientation = LinearLayout.HORIZONTAL
             gravity = Gravity.CENTER_VERTICAL
-            setPadding(40, 44, 40, 24)
+            setPadding(16.dp(), 18.dp(), 16.dp(), 12.dp())
         }
         val btnBack = TextView(this).apply {
             text = "←"
-            textSize = 24f
+            textSize = 22f
             setTextColor(Color.WHITE)
-            setPadding(0, 0, 28, 0)
+            setPadding(0, 0, 14.dp(), 0)
             setOnClickListener { finish() }
         }
         val tvTopTitle = TextView(this).apply {
             text = "QuickClick - Instructions"
-            textSize = 20f
+            textSize = 19f
             setTypeface(null, Typeface.BOLD)
             setTextColor(Color.WHITE)
         }
@@ -48,10 +56,26 @@ class InstructionsActivity : AppCompatActivity() {
         topBar.addView(tvTopTitle)
         root.addView(topBar)
 
-        val scroll = ScrollView(this)
+        // Body Container: Scrollable instructions on the left + Floating preview anchored on the right
+        val bodyFrame = FrameLayout(this).apply {
+            layoutParams = LinearLayout.LayoutParams(
+                LinearLayout.LayoutParams.MATCH_PARENT,
+                0,
+                1f
+            )
+        }
+
+        val scroll = ScrollView(this).apply {
+            layoutParams = FrameLayout.LayoutParams(
+                FrameLayout.LayoutParams.MATCH_PARENT,
+                FrameLayout.LayoutParams.MATCH_PARENT
+            )
+        }
+
+        // Right padding (76dp) reserves dedicated space for the right-side floating preview (48dp + 12dp margin + 16dp gap)
         val content = LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
-            setPadding(40, 8, 40, 56)
+            setPadding(16.dp(), 4.dp(), 76.dp(), 28.dp())
         }
 
         // Header Card
@@ -59,22 +83,22 @@ class InstructionsActivity : AppCompatActivity() {
             gravity = Gravity.CENTER_HORIZONTAL
             addView(TextView(context).apply {
                 text = "Instructions"
-                textSize = 24f
+                textSize = 22f
                 setTypeface(null, Typeface.BOLD)
                 setTextColor(Color.WHITE)
                 gravity = Gravity.CENTER
             })
             addView(TextView(context).apply {
                 text = "Multi Target Mode"
-                textSize = 14f
+                textSize = 13.5f
                 setTypeface(null, Typeface.BOLD)
                 setTextColor(Color.parseColor("#60A5FA"))
                 gravity = Gravity.CENTER
-                setPadding(0, 4, 0, 14)
+                setPadding(0, 2.dp(), 0, 8.dp())
             })
             addView(TextView(context).apply {
                 text = "Please take a moment to read these instructions and learn how to use this application."
-                textSize = 13f
+                textSize = 12.5f
                 setTextColor(Color.parseColor("#9CA3AF"))
                 gravity = Gravity.CENTER
             })
@@ -85,21 +109,21 @@ class InstructionsActivity : AppCompatActivity() {
         val overlayCard = createCard().apply {
             addView(TextView(context).apply {
                 text = "Using The Overlay"
-                textSize = 16f
+                textSize = 15.5f
                 setTypeface(null, Typeface.BOLD)
                 setTextColor(Color.WHITE)
-                setPadding(0, 0, 0, 8)
+                setPadding(0, 0, 0, 4.dp())
             })
             addView(TextView(context).apply {
                 text = "The multi target mode overlay has six buttons that vary in function depending on whether you tap them or hold them."
-                textSize = 13f
+                textSize = 12.5f
                 setTextColor(Color.parseColor("#9CA3AF"))
-                setPadding(0, 0, 0, 24)
+                setPadding(0, 0, 0, 12.dp())
             })
             addView(OverlayDiagramView(context).apply {
                 layoutParams = LinearLayout.LayoutParams(
                     LinearLayout.LayoutParams.MATCH_PARENT,
-                    820
+                    330.dp()
                 )
             })
         }
@@ -135,23 +159,148 @@ class InstructionsActivity : AppCompatActivity() {
         )
 
         scroll.addView(content)
-        root.addView(scroll)
+        bodyFrame.addView(scroll)
+
+        // Right-Side Floating Overlay Preview (Non-overlapping with instruction text)
+        val floatingPreviewContainer = buildRightFloatingPreview()
+        bodyFrame.addView(floatingPreviewContainer)
+
+        root.addView(bodyFrame)
         setContentView(root)
+    }
+
+    private fun buildRightFloatingPreview(): LinearLayout {
+        val wrapper = LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
+            gravity = Gravity.CENTER_HORIZONTAL
+            layoutParams = FrameLayout.LayoutParams(
+                FrameLayout.LayoutParams.WRAP_CONTENT,
+                FrameLayout.LayoutParams.WRAP_CONTENT,
+                Gravity.END or Gravity.CENTER_VERTICAL
+            ).apply {
+                rightMargin = 12.dp()
+            }
+        }
+
+        val badge = TextView(this).apply {
+            text = "PREVIEW"
+            textSize = 8.5f
+            letterSpacing = 0.08f
+            setTypeface(null, Typeface.BOLD)
+            setTextColor(Color.parseColor("#60A5FA"))
+            setPadding(6.dp(), 2.dp(), 6.dp(), 2.dp())
+            background = GradientDrawable().apply {
+                setColor(Color.parseColor("#1A2979FF"))
+                cornerRadius = 8.dpF()
+            }
+            layoutParams = LinearLayout.LayoutParams(
+                LinearLayout.LayoutParams.WRAP_CONTENT,
+                LinearLayout.LayoutParams.WRAP_CONTENT
+            ).apply {
+                bottomMargin = 6.dp()
+            }
+        }
+
+        val bar = LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
+            gravity = Gravity.CENTER
+            background = GradientDrawable().apply {
+                setColor(Color.parseColor("#E61A1D24"))
+                setStroke(1.dp(), Color.parseColor("#383E4E"))
+                cornerRadius = 14.dpF()
+            }
+            setPadding(4.dp(), 6.dp(), 4.dp(), 6.dp())
+            layoutParams = LinearLayout.LayoutParams(
+                48.dp(),
+                LinearLayout.LayoutParams.WRAP_CONTENT
+            )
+        }
+
+        var isPreviewPlaying = false
+        var isPreviewCollapsed = false
+
+        val btnPlay = createPreviewButton("▶", Color.WHITE)
+        btnPlay.setOnClickListener {
+            isPreviewPlaying = !isPreviewPlaying
+            btnPlay.text = if (isPreviewPlaying) "⏸" else "▶"
+            Toast.makeText(
+                this,
+                if (isPreviewPlaying) "Preview: Auto-clicker running" else "Preview: Auto-clicker paused",
+                Toast.LENGTH_SHORT
+            ).show()
+        }
+
+        val btnAdd = createPreviewButton("+", Color.WHITE).apply {
+            setOnClickListener {
+                Toast.makeText(this@InstructionsActivity, "Tap: Add click target | Hold: Add swipe target", Toast.LENGTH_SHORT).show()
+            }
+        }
+
+        val btnRemove = createPreviewButton("−", Color.WHITE).apply {
+            setOnClickListener {
+                Toast.makeText(this@InstructionsActivity, "Tap: Remove last target | Hold: Clear all", Toast.LENGTH_SHORT).show()
+            }
+        }
+
+        val btnSettings = createPreviewButton("⚙", Color.WHITE).apply {
+            setOnClickListener {
+                Toast.makeText(this@InstructionsActivity, "Tap: Open Settings | Hold: Open Home", Toast.LENGTH_SHORT).show()
+            }
+        }
+
+        val btnClose = createPreviewButton("✕", Color.parseColor("#F87171")).apply {
+            setOnClickListener {
+                Toast.makeText(this@InstructionsActivity, "Tap: Close floating overlay", Toast.LENGTH_SHORT).show()
+            }
+        }
+
+        val collapsibleButtons = listOf(btnPlay, btnAdd, btnRemove, btnSettings, btnClose)
+
+        val btnCollapse = createPreviewButton(">", Color.WHITE).apply {
+            setOnClickListener {
+                isPreviewCollapsed = !isPreviewCollapsed
+                val vis = if (isPreviewCollapsed) View.GONE else View.VISIBLE
+                collapsibleButtons.forEach { it.visibility = vis }
+                text = if (isPreviewCollapsed) "<" else ">"
+            }
+        }
+
+        listOf(btnPlay, btnAdd, btnRemove, btnSettings, btnCollapse, btnClose).forEach {
+            bar.addView(it)
+        }
+
+        wrapper.addView(badge)
+        wrapper.addView(bar)
+        return wrapper
+    }
+
+    private fun createPreviewButton(symbol: String, color: Int): TextView {
+        return TextView(this).apply {
+            text = symbol
+            textSize = 17f
+            setTextColor(color)
+            gravity = Gravity.CENTER
+            setPadding(0, 8.dp(), 0, 8.dp())
+            layoutParams = LinearLayout.LayoutParams(
+                LinearLayout.LayoutParams.MATCH_PARENT,
+                LinearLayout.LayoutParams.WRAP_CONTENT
+            )
+        }
     }
 
     private fun createCard(): LinearLayout {
         return LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
-            setPadding(36, 30, 36, 30)
+            setPadding(16.dp(), 14.dp(), 16.dp(), 14.dp())
             background = GradientDrawable().apply {
                 setColor(Color.parseColor("#1A1D24"))
-                cornerRadius = 24f
-                setStroke(2, Color.parseColor("#282C37"))
+                cornerRadius = 14.dpF()
+                setStroke(1.dp(), Color.parseColor("#282C37"))
             }
             layoutParams = LinearLayout.LayoutParams(
                 LinearLayout.LayoutParams.MATCH_PARENT,
                 LinearLayout.LayoutParams.WRAP_CONTENT
-            ).apply { bottomMargin = 18 }
+            ).apply { bottomMargin = 10.dp() }
         }
     }
 
@@ -159,21 +308,24 @@ class InstructionsActivity : AppCompatActivity() {
         return createCard().apply {
             addView(TextView(context).apply {
                 text = title
-                textSize = 16f
+                textSize = 15f
                 setTypeface(null, Typeface.BOLD)
                 setTextColor(Color.WHITE)
-                setPadding(0, 0, 0, 10)
+                setPadding(0, 0, 0, 5.dp())
             })
             addView(TextView(context).apply {
                 text = body
-                textSize = 13f
-                lineHeight = 42
+                textSize = 12.5f
+                setLineSpacing(4f, 1.15f)
                 setTextColor(Color.parseColor("#9CA3AF"))
             })
         }
     }
 
     private class OverlayDiagramView(context: Context) : View(context) {
+
+        private val density = context.resources.displayMetrics.density
+        private fun Float.dp(): Float = this * density
 
         private val barFill = Paint(Paint.ANTI_ALIAS_FLAG).apply {
             color = Color.parseColor("#12151C")
@@ -182,23 +334,22 @@ class InstructionsActivity : AppCompatActivity() {
         private val barStroke = Paint(Paint.ANTI_ALIAS_FLAG).apply {
             color = Color.parseColor("#3B4254")
             style = Paint.Style.STROKE
-            strokeWidth = 3f
+            strokeWidth = 1.2f.dp()
         }
         private val linePaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
             color = Color.parseColor("#60A5FA")
             style = Paint.Style.STROKE
-            strokeWidth = 2.5f
+            strokeWidth = 1.2f.dp()
         }
         private val symbolPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
             color = Color.WHITE
-            textSize = 42f
+            textSize = 15f.dp()
             textAlign = Paint.Align.CENTER
             typeface = Typeface.create(Typeface.DEFAULT, Typeface.BOLD)
         }
-        private val descPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+        private val descTextPaint = TextPaint(Paint.ANTI_ALIAS_FLAG).apply {
             color = Color.parseColor("#CBD5E1")
-            textSize = 31f
-            textAlign = Paint.Align.LEFT
+            textSize = 10.5f.dp()
         }
 
         private data class DiagramItem(
@@ -210,58 +361,66 @@ class InstructionsActivity : AppCompatActivity() {
         private val items = listOf(
             DiagramItem("▶", Color.WHITE, listOf("Tap: Start/stop clicking.")),
             DiagramItem("+", Color.WHITE, listOf("Tap: Add a click target.", "Hold: Add a swipe target.")),
-            DiagramItem("−", Color.WHITE, listOf("Tap: Remove the last target added.", "Hold: Remove all targets.")),
-            DiagramItem("⚙", Color.WHITE, listOf("Tap: Open options and settings.", "Hold: Open QuickClick home.")),
-            DiagramItem(">", Color.WHITE, listOf("Tap: Collapse all overlays.", "Hold: Reposition the overlay.")),
+            DiagramItem("−", Color.WHITE, listOf("Tap: Remove last target.", "Hold: Remove all targets.")),
+            DiagramItem("⚙", Color.WHITE, listOf("Tap: Open settings.", "Hold: Open QuickClick home.")),
+            DiagramItem(">", Color.WHITE, listOf("Tap: Collapse overlays.", "Hold: Reposition overlay.")),
             DiagramItem("✕", Color.parseColor("#F87171"), listOf("Tap: Close floating overlay."))
         )
 
         override fun onDraw(canvas: Canvas) {
             super.onDraw(canvas)
-            val barLeft = 12f
-            val barWidth = 136f
-            val barTop = 10f
-            val barBottom = height - 10f
+            val barLeft = 2f.dp()
+            val barWidth = 42f.dp()
+            val barTop = 4f.dp()
+            val barBottom = height - 4f.dp()
             val rowHeight = (barBottom - barTop) / items.size
 
-            // Draw floating overlay bar illustration
-            canvas.drawRoundRect(barLeft, barTop, barLeft + barWidth, barBottom, 24f, 24f, barFill)
-            canvas.drawRoundRect(barLeft, barTop, barLeft + barWidth, barBottom, 24f, 24f, barStroke)
+            canvas.drawRoundRect(barLeft, barTop, barLeft + barWidth, barBottom, 10f.dp(), 10f.dp(), barFill)
+            canvas.drawRoundRect(barLeft, barTop, barLeft + barWidth, barBottom, 10f.dp(), 10f.dp(), barStroke)
 
             val fmSym = symbolPaint.fontMetrics
             val symOffset = (fmSym.descent - fmSym.ascent) / 2f - fmSym.descent
 
-            val fmDesc = descPaint.fontMetrics
-            val descOffset = (fmDesc.descent - fmDesc.ascent) / 2f - fmDesc.descent
-
             items.forEachIndexed { idx, item ->
                 val centerY = barTop + (idx + 0.5f) * rowHeight
 
-                // Symbol inside bar
                 symbolPaint.color = item.symbolColor
                 canvas.drawText(item.symbol, barLeft + barWidth / 2f, centerY + symOffset, symbolPaint)
 
-                val lineStartX = barLeft + barWidth + 16f
+                val lineStartX = barLeft + barWidth + 5f.dp()
                 if (item.lines.size == 1) {
-                    val lineEndX = lineStartX + 44f
+                    val lineEndX = lineStartX + 14f.dp()
                     canvas.drawLine(lineStartX, centerY, lineEndX, centerY, linePaint)
-                    canvas.drawText(item.lines[0], lineEndX + 16f, centerY + descOffset, descPaint)
+                    drawWrappedLabel(canvas, item.lines[0], lineEndX + 6f.dp(), centerY)
                 } else {
-                    val midX = lineStartX + 24f
-                    val branchEndX = midX + 22f
-                    val topY = centerY - 22f
-                    val botY = centerY + 22f
+                    val midX = lineStartX + 8f.dp()
+                    val branchEndX = midX + 8f.dp()
+                    val topY = centerY - 9f.dp()
+                    val botY = centerY + 9f.dp()
 
-                    // Bracket connector
                     canvas.drawLine(lineStartX, centerY, midX, centerY, linePaint)
                     canvas.drawLine(midX, topY, midX, botY, linePaint)
                     canvas.drawLine(midX, topY, branchEndX, topY, linePaint)
                     canvas.drawLine(midX, botY, branchEndX, botY, linePaint)
 
-                    canvas.drawText(item.lines[0], branchEndX + 16f, topY + descOffset, descPaint)
-                    canvas.drawText(item.lines[1], branchEndX + 16f, botY + descOffset, descPaint)
+                    drawWrappedLabel(canvas, item.lines[0], branchEndX + 6f.dp(), topY)
+                    drawWrappedLabel(canvas, item.lines[1], branchEndX + 6f.dp(), botY)
                 }
             }
+        }
+
+        private fun drawWrappedLabel(canvas: Canvas, text: String, x: Float, centerY: Float) {
+            val availableWidth = (width - x - 2f.dp()).toInt().coerceAtLeast(40)
+            val staticLayout = StaticLayout.Builder
+                .obtain(text, 0, text.length, descTextPaint, availableWidth)
+                .setAlignment(Layout.Alignment.ALIGN_NORMAL)
+                .setIncludePad(false)
+                .build()
+
+            canvas.save()
+            canvas.translate(x, centerY - staticLayout.height / 2f)
+            staticLayout.draw(canvas)
+            canvas.restore()
         }
     }
 }
