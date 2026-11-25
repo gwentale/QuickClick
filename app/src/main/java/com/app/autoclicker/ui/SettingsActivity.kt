@@ -220,7 +220,6 @@ class SettingsActivity : AppCompatActivity() {
             checked = cfg.pauseOnAppChange
         ) { cfg.pauseOnAppChange = it }
 
-        // Manage Configurations Button with Vector Folder Icon
         val btnManage = LinearLayout(this).apply {
             orientation = LinearLayout.HORIZONTAL
             gravity = Gravity.CENTER
@@ -255,20 +254,41 @@ class SettingsActivity : AppCompatActivity() {
 
         var selectedIdx = cfg.stopMode.ordinal
         val radioButtons = mutableListOf<RadioButton>()
+        val subtitleViews = mutableListOf<TextView>()
 
-        val items = listOf(
-            "Run Indefinitely" to "∞",
-            "Stop After Amount Of Time" to "${cfg.stopAfterTimeValue} ${cfg.stopAfterTimeUnit.label}",
-            "Stop At Specific Time" to DialogHelper.format12Hour(cfg.stopAtHour, cfg.stopAtMinute),
-            "Stop After Run Count" to "${cfg.stopAfterRunCount} Run(s)"
+        fun getSubtitles(): List<String> = listOf(
+            "∞",
+            "${cfg.stopAfterTimeValue} ${cfg.stopAfterTimeUnit.label}",
+            if (cfg.stopMode == StopMode.AT_SPECIFIC_TIME) {
+                DialogHelper.format12Hour(cfg.stopAtHour, cfg.stopAtMinute)
+            } else {
+                "Do Not Stop By Clock (${DialogHelper.format12Hour(cfg.stopAtHour, cfg.stopAtMinute)})"
+            },
+            "${cfg.stopAfterRunCount} Run(s)"
         )
+
+        fun refreshDialogLabels() {
+            val latest = getSubtitles()
+            subtitleViews.forEachIndexed { i, tv -> tv.text = latest[i] }
+        }
 
         fun selectOnly(targetIdx: Int) {
             selectedIdx = targetIdx
+            cfg.stopMode = StopMode.values()[targetIdx]
             radioButtons.forEachIndexed { i, rb -> rb.isChecked = (i == targetIdx) }
+            refreshDialogLabels()
+            renderSettings()
         }
 
-        items.forEachIndexed { idx, (title, sub) ->
+        val titles = listOf(
+            "Run Indefinitely",
+            "Stop After Amount Of Time",
+            "Stop At Specific Time",
+            "Stop After Run Count"
+        )
+        val initialSubs = getSubtitles()
+
+        titles.forEachIndexed { idx, title ->
             val row = LinearLayout(this).apply {
                 orientation = LinearLayout.VERTICAL
                 setPadding(4.dp(), 6.dp(), 4.dp(), 6.dp())
@@ -284,19 +304,21 @@ class SettingsActivity : AppCompatActivity() {
             radioButtons.add(rb)
 
             val tvSub = TextView(this).apply {
-                text = sub
+                text = initialSubs[idx]
                 textSize = 12.5f
                 setTextColor(Color.parseColor("#8A8F9E"))
                 setPadding(32.dp(), 1.dp(), 0, 0)
             }
+            subtitleViews.add(tvSub)
 
-            val handleOptionTap = {
-                selectOnly(idx)
+            val openOptionEditor = {
                 val chosenMode = StopMode.values()[idx]
-                cfg.stopMode = chosenMode
                 when (chosenMode) {
-                    StopMode.INDEFINITE -> renderSettings()
+                    StopMode.INDEFINITE -> {
+                        selectOnly(idx)
+                    }
                     StopMode.AFTER_AMOUNT_OF_TIME -> {
+                        selectOnly(idx)
                         DialogHelper.showDurationDialog(
                             ctx = this,
                             description = "Set how long you want to click for.",
@@ -307,7 +329,7 @@ class SettingsActivity : AppCompatActivity() {
                             cfg.stopAfterTimeValue = amount
                             cfg.stopAfterTimeUnit = unit
                             cfg.stopAfterTimeMs = amount * unit.multiplierMs
-                            renderSettings()
+                            selectOnly(idx)
                         }
                     }
                     StopMode.AT_SPECIFIC_TIME -> {
@@ -317,19 +339,24 @@ class SettingsActivity : AppCompatActivity() {
                             description = "Set a time to stop clicking.",
                             immediateLabel = "Do Not Stop By Clock",
                             specificLabel = "Stop At Specific Time",
-                            isImmediateInitial = false,
+                            isImmediateInitial = (cfg.stopMode != StopMode.AT_SPECIFIC_TIME),
                             initHour24 = cfg.stopAtHour,
                             initMinute = cfg.stopAtMinute,
                             initSecond = 0,
                             includeSeconds = false,
                             isOverlay = false
-                        ) { _, h, m, _ ->
+                        ) { isDoNotStopByClock, h, m, _ ->
                             cfg.stopAtHour = h
                             cfg.stopAtMinute = m
-                            renderSettings()
+                            if (isDoNotStopByClock) {
+                                selectOnly(StopMode.INDEFINITE.ordinal)
+                            } else {
+                                selectOnly(StopMode.AT_SPECIFIC_TIME.ordinal)
+                            }
                         }
                     }
                     StopMode.AFTER_RUN_COUNT -> {
+                        selectOnly(idx)
                         DialogHelper.showNumberDialog(
                             ctx = this,
                             title = "Stop After Run Count",
@@ -338,14 +365,22 @@ class SettingsActivity : AppCompatActivity() {
                             isOverlay = false
                         ) { count ->
                             cfg.stopAfterRunCount = count.toInt().coerceAtLeast(1)
-                            renderSettings()
+                            selectOnly(idx)
                         }
                     }
                 }
             }
 
-            rb.setOnClickListener { handleOptionTap() }
-            row.setOnClickListener { handleOptionTap() }
+            // Tapping the radio button selects that mode immediately; tapping the subtitle/row opens its value editor
+            rb.setOnClickListener {
+                if (idx == StopMode.AT_SPECIFIC_TIME.ordinal) {
+                    openOptionEditor()
+                } else {
+                    selectOnly(idx)
+                }
+            }
+            tvSub.setOnClickListener { openOptionEditor() }
+            row.setOnClickListener { openOptionEditor() }
 
             row.addView(rb)
             row.addView(tvSub)
