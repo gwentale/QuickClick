@@ -255,16 +255,16 @@ class InstructionsActivity : AppCompatActivity() {
 
         val collapsibleButtons = listOf(btnPlay, btnAdd, btnRemove, btnSettings, btnClose)
 
-        val btnCollapse = createPreviewVectorButton(R.drawable.ic_chevron_right, Color.WHITE).apply {
+        val btnCollapse = createPreviewVectorButton(R.drawable.ic_chevron_left, Color.parseColor("#60A5FA")).apply {
             setOnClickListener {
                 isPreviewCollapsed = !isPreviewCollapsed
                 val vis = if (isPreviewCollapsed) View.GONE else View.VISIBLE
                 collapsibleButtons.forEach { it.visibility = vis }
-                setImageResource(if (isPreviewCollapsed) R.drawable.ic_chevron_left else R.drawable.ic_chevron_right)
+                setImageResource(if (isPreviewCollapsed) R.drawable.ic_chevron_right else R.drawable.ic_chevron_left)
             }
         }
 
-        listOf(btnPlay, btnAdd, btnRemove, btnSettings, btnCollapse, btnClose).forEach {
+        listOf(btnCollapse, btnPlay, btnAdd, btnRemove, btnSettings, btnClose).forEach {
             bar.addView(it)
         }
 
@@ -348,11 +348,11 @@ class InstructionsActivity : AppCompatActivity() {
         )
 
         private val items = listOf(
+            DiagramItem(ContextCompat.getDrawable(context, R.drawable.ic_chevron_left), Color.parseColor("#60A5FA"), listOf("Tap: Shrink (<) / Expand (>).", "Hold: Drag overlay.")),
             DiagramItem(ContextCompat.getDrawable(context, R.drawable.ic_play), Color.WHITE, listOf("Tap: Start/stop clicking.")),
             DiagramItem(ContextCompat.getDrawable(context, R.drawable.ic_add), Color.WHITE, listOf("Tap: Add a click target.", "Hold: Add a swipe target.")),
             DiagramItem(ContextCompat.getDrawable(context, R.drawable.ic_remove), Color.WHITE, listOf("Tap: Remove last target.", "Hold: Remove all targets.")),
             DiagramItem(ContextCompat.getDrawable(context, R.drawable.ic_settings), Color.WHITE, listOf("Tap: Open settings.", "Hold: Open QuickClick home.")),
-            DiagramItem(ContextCompat.getDrawable(context, R.drawable.ic_chevron_right), Color.WHITE, listOf("Tap: Collapse overlays.", "Hold: Reposition overlay.")),
             DiagramItem(ContextCompat.getDrawable(context, R.drawable.ic_close), Color.parseColor("#F87171"), listOf("Tap: Close floating overlay."))
         )
 
