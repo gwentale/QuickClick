@@ -2,16 +2,11 @@ package com.app.autoclicker.service
 
 import android.accessibilityservice.AccessibilityService
 import android.accessibilityservice.GestureDescription
-import android.app.Notification
-import android.app.NotificationChannel
-import android.app.NotificationManager
 import android.content.Intent
-import android.content.pm.ServiceInfo
 import android.graphics.Color
 import android.graphics.Path
 import android.graphics.PixelFormat
 import android.graphics.drawable.GradientDrawable
-import android.os.Build
 import android.os.Handler
 import android.os.Looper
 import android.view.Gravity
@@ -33,9 +28,8 @@ import kotlin.random.Random
 class AutoClickerService : AccessibilityService() {
 
     companion object {
+        @Volatile
         var instance: AutoClickerService? = null
-        private const val CHANNEL_ID = "quickclick_keepalive_channel"
-        private const val NOTIF_ID = 1001
     }
 
     private lateinit var windowManager: WindowManager
@@ -54,48 +48,15 @@ class AutoClickerService : AccessibilityService() {
 
     override fun onServiceConnected() {
         super.onServiceConnected()
-        instance = this
         windowManager = getSystemService(WINDOW_SERVICE) as WindowManager
-        startKeepAliveForeground()
+        instance = this
     }
 
-    private fun startKeepAliveForeground() {
-        val manager = getSystemService(NOTIFICATION_SERVICE) as NotificationManager
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
-            val channel = NotificationChannel(
-                CHANNEL_ID,
-                "QuickClick Service",
-                NotificationManager.IMPORTANCE_LOW
-            ).apply {
-                description = "Keeps QuickClick accessibility service running reliably"
-                setShowBadge(false)
-            }
-            manager.createNotificationChannel(channel)
-        }
-
-        val notifBuilder = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
-            Notification.Builder(this, CHANNEL_ID)
-        } else {
-            @Suppress("DEPRECATION")
-            Notification.Builder(this)
-        }
-
-        val notification = notifBuilder
-            .setContentTitle("QuickClick Active")
-            .setContentText("Accessibility engine is running in background")
-            .setSmallIcon(android.R.drawable.ic_menu_compass)
-            .setOngoing(true)
-            .build()
-
-        try {
-            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.UPSIDE_DOWN_CAKE) {
-                startForeground(NOTIF_ID, notification, ServiceInfo.FOREGROUND_SERVICE_TYPE_SPECIAL_USE)
-            } else {
-                startForeground(NOTIF_ID, notification)
-            }
-        } catch (_: Exception) {
-            // Fallback if notification permission is not yet granted
-        }
+    override fun onUnbind(intent: Intent?): Boolean {
+        stopClicking()
+        hideOverlay()
+        instance = null
+        return super.onUnbind(intent)
     }
 
     override fun onAccessibilityEvent(event: AccessibilityEvent?) {
@@ -228,7 +189,9 @@ class AutoClickerService : AccessibilityService() {
 
     fun hideOverlay() {
         clearAllTargets()
-        controlBarView?.let { windowManager.removeView(it) }
+        controlBarView?.let {
+            try { windowManager.removeView(it) } catch (_: Exception) {}
+        }
         controlBarView = null
     }
 
@@ -328,14 +291,16 @@ class AutoClickerService : AccessibilityService() {
         val countToRemove = if (removed.isSwipe) 2 else 1
         repeat(countToRemove) {
             if (targetViews.isNotEmpty()) {
-                windowManager.removeView(targetViews.removeAt(targetViews.lastIndex))
+                try { windowManager.removeView(targetViews.removeAt(targetViews.lastIndex)) } catch (_: Exception) {}
             }
         }
     }
 
     private fun clearAllTargets() {
         ConfigStore.activeConfig.targets.clear()
-        targetViews.forEach { windowManager.removeView(it) }
+        targetViews.forEach {
+            try { windowManager.removeView(it) } catch (_: Exception) {}
+        }
         targetViews.clear()
     }
 
@@ -378,7 +343,6 @@ class AutoClickerService : AccessibilityService() {
             isRunning = true
             withContext(Dispatchers.Main) {
                 btnPlay.text = "⏸"
-                // Hide targets if Show Active Targets is disabled OR Ghost Anti-Detect is enabled
                 if (!cfg.showActiveTargets || cfg.ghostAntiDetect) {
                     targetViews.forEach { it.visibility = View.INVISIBLE }
                 }
@@ -398,7 +362,6 @@ class AutoClickerService : AccessibilityService() {
                 for (target in cfg.targets.toList()) {
                     if (!isActive || !isRunning) break
 
-                    // Ghost Anti-Detect adds subtle timing jitter if enabled
                     val ghostTimingJitter = if (cfg.ghostAntiDetect) Random.nextLong(3, 18) else 0L
                     val ghostDurationJitter = if (cfg.ghostAntiDetect) Random.nextLong(5, 22) else 0L
 
@@ -469,7 +432,6 @@ class AutoClickerService : AccessibilityService() {
                 val (ex, ey) = applyRandomRadius(target.endX, target.endY, radiusPx)
                 lineTo(ex, ey)
             } else if (ghostMode) {
-                // Micro finger drift (1-2px) to simulate natural human touch
                 val driftX = rx + Random.nextFloat() * 3f - 1.5f
                 val driftY = ry + Random.nextFloat() * 3f - 1.5f
                 lineTo(driftX, driftY)
