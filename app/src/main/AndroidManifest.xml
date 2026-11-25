@@ -21,11 +21,15 @@
 
         <activity
             android:name=".ui.SettingsActivity"
-            android:label="Settings" />
+            android:label="Multi-Target Settings" />
 
         <activity
             android:name=".ui.AutoStartActivity"
             android:label="Auto-Open Settings" />
+
+        <activity
+            android:name=".ui.InstructionsActivity"
+            android:label="Instructions" />
 
         <service
             android:name=".service.AutoClickerService"
