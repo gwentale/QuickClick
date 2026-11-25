@@ -9,10 +9,11 @@ android {
 
     defaultConfig {
         applicationId = "com.app.autoclicker"
+        applicationIdSuffix = ".dev"
         minSdk = 24
         targetSdk = 34
         versionCode = System.getenv("APP_VERSION_CODE")?.toIntOrNull() ?: 1
-        versionName = System.getenv("APP_VERSION_NAME") ?: "1.0.0"
+        versionName = System.getenv("APP_VERSION_NAME") ?: "1.0.0-dev"
     }
 
     signingConfigs {
