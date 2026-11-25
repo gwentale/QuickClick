@@ -121,15 +121,28 @@ class MainActivity : AppCompatActivity() {
 
         addSectionLabel("CONTROLS")
 
-        addPrimaryButton("START MULTI-TARGET MODE") {
-            val svc = AutoClickerService.instance
+        val svc = AutoClickerService.instance
+        val overlayActive = svc?.isOverlayShowing() == true
+
+        addPrimaryButton(
+            label = if (overlayActive) "STOP MULTI-TARGET MODE" else "START MULTI-TARGET MODE",
+            bgColor = if (overlayActive) "#DC2626" else "#2979FF"
+        ) {
+            val currentSvc = AutoClickerService.instance
             if (!Settings.canDrawOverlays(this)) {
                 Toast.makeText(this, "Please grant Overlay Permission first", Toast.LENGTH_SHORT).show()
-            } else if (svc == null) {
+            } else if (currentSvc == null) {
                 Toast.makeText(this, "Please enable Accessibility Service first", Toast.LENGTH_SHORT).show()
             } else {
-                svc.showOverlay()
-                Toast.makeText(this, "Overlay started", Toast.LENGTH_SHORT).show()
+                if (currentSvc.isOverlayShowing()) {
+                    currentSvc.stopClicking()
+                    currentSvc.hideOverlay()
+                    Toast.makeText(this, "Overlay stopped", Toast.LENGTH_SHORT).show()
+                } else {
+                    currentSvc.showOverlay()
+                    Toast.makeText(this, "Overlay started", Toast.LENGTH_SHORT).show()
+                }
+                renderUI()
             }
         }
 
@@ -139,6 +152,10 @@ class MainActivity : AppCompatActivity() {
 
         addSecondaryButton("Auto-Open Settings") {
             startActivity(Intent(this, AutoStartActivity::class.java))
+        }
+
+        addSecondaryButton("Instructions") {
+            startActivity(Intent(this, InstructionsActivity::class.java))
         }
     }
 
@@ -195,7 +212,7 @@ class MainActivity : AppCompatActivity() {
         rootContainer.addView(card)
     }
 
-    private fun addPrimaryButton(label: String, onClick: () -> Unit) {
+    private fun addPrimaryButton(label: String, bgColor: String, onClick: () -> Unit) {
         val btn = TextView(this).apply {
             text = label
             textSize = 15f
@@ -204,7 +221,7 @@ class MainActivity : AppCompatActivity() {
             gravity = Gravity.CENTER
             setPadding(36, 34, 36, 34)
             background = GradientDrawable().apply {
-                setColor(Color.parseColor("#2979FF"))
+                setColor(Color.parseColor(bgColor))
                 cornerRadius = 24f
             }
             layoutParams = LinearLayout.LayoutParams(
