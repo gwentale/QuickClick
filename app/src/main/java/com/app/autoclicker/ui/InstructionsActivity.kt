@@ -22,6 +22,7 @@ import androidx.appcompat.app.AppCompatActivity
 class InstructionsActivity : AppCompatActivity() {
 
     private fun Int.dp(): Int = (this * resources.displayMetrics.density).toInt()
+    private fun Int.dpF(): Float = this * resources.displayMetrics.density
     private fun Float.dpF(): Float = this * resources.displayMetrics.density
 
     override fun onCreate(savedInstanceState: Bundle?) {
