@@ -19,4 +19,3 @@ This project was inspired by **QuickTouch** by [SimpleHat Software, LLC](https:/
 * QuickClick is an independent open-source project and is **not affiliated with, endorsed by, or associated with SimpleHat Software, LLC** or any third-party platforms.
 * This tool is provided strictly for personal task automation, UI testing, and accessibility assistance.
 * Users bear full responsibility for ensuring their usage complies with the Terms of Service of any third-party apps. The developer is not responsible for any account limitations, penalties, or unintended actions resulting from the use of this software.
-* 
