@@ -2,9 +2,6 @@
 <manifest xmlns:android="http://schemas.android.com/apk/res/android">
 
     <uses-permission android:name="android.permission.SYSTEM_ALERT_WINDOW" />
-    <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
-    <uses-permission android:name="android.permission.FOREGROUND_SERVICE_SPECIAL_USE" />
-    <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
     <uses-permission android:name="android.permission.REQUEST_IGNORE_BATTERY_OPTIMIZATIONS" />
     <uses-permission android:name="android.permission.QUERY_ALL_PACKAGES" />
 
@@ -24,8 +21,7 @@
 
         <activity
             android:name=".ui.SettingsActivity"
-            android:label="Settings"
-            android:theme="@style/Theme.MaterialComponents.DayNight.DarkActionBar" />
+            android:label="Settings" />
 
         <activity
             android:name=".ui.AutoStartActivity"
@@ -35,11 +31,7 @@
         <service
             android:name=".service.AutoClickerService"
             android:exported="false"
-            android:foregroundServiceType="specialUse"
             android:permission="android.permission.BIND_ACCESSIBILITY_SERVICE">
-            <property
-                android:name="android.app.PROPERTY_SPECIAL_USE_FGS_SUBTYPE"
-                android:value="Keep accessibility clicker service active in background" />
             <intent-filter>
                 <action android:name="android.accessibilityservice.AccessibilityService" />
             </intent-filter>
