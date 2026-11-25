@@ -84,6 +84,7 @@ data class ClickConfig(
 
     // Randomization, Stealth & Advanced
     var ghostAntiDetect: Boolean = false,
+    var flashSaleSingleBurst: Boolean = false,
     var randomizationRadiusPx: Int = 0,
     var showActiveTargets: Boolean = true,
     var targetProgrammability: Boolean = true,
@@ -115,6 +116,7 @@ data class ClickConfig(
             put("stopAtSecond", stopAtSecond)
             put("stopAfterRunCount", stopAfterRunCount)
             put("ghostAntiDetect", ghostAntiDetect)
+            put("flashSaleSingleBurst", flashSaleSingleBurst)
             put("randomizationRadiusPx", randomizationRadiusPx)
             put("showActiveTargets", showActiveTargets)
             put("targetProgrammability", targetProgrammability)
@@ -184,6 +186,7 @@ data class ClickConfig(
                 stopAtSecond = obj.optInt("stopAtSecond", 0),
                 stopAfterRunCount = obj.optInt("stopAfterRunCount", 50),
                 ghostAntiDetect = obj.optBoolean("ghostAntiDetect", false),
+                flashSaleSingleBurst = obj.optBoolean("flashSaleSingleBurst", false),
                 randomizationRadiusPx = obj.optInt("randomizationRadiusPx", 0),
                 showActiveTargets = obj.optBoolean("showActiveTargets", true),
                 targetProgrammability = obj.optBoolean("targetProgrammability", true),
