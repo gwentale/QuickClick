@@ -92,8 +92,8 @@ data class ClickConfig(
 
     val targets: MutableList<TargetPoint> = mutableListOf()
 ) {
-    fun toJson(): String {
-        val obj = JSONObject().apply {
+    fun toJsonObject(): JSONObject {
+        return JSONObject().apply {
             put("name", name)
             put("startDelayMs", startDelayMs)
             put("startDelayRandomMs", startDelayRandomMs)
@@ -149,12 +149,21 @@ data class ClickConfig(
             }
             put("targets", arr)
         }
-        return obj.toString()
     }
 
+    fun toJson(): String = toJsonObject().toString()
+
     companion object {
+        fun sanitizeJson(raw: String): String {
+            return raw.trimStart('\uFEFF', ' ', '\t', '\n', '\r').trimEnd()
+        }
+
         fun fromJson(raw: String): ClickConfig {
-            val obj = JSONObject(raw)
+            val cleaned = sanitizeJson(raw)
+            return fromJson(JSONObject(cleaned))
+        }
+
+        fun fromJson(obj: JSONObject): ClickConfig {
             val cfg = ClickConfig(
                 name = obj.optString("name", "Preset"),
                 startDelayMs = obj.optLong("startDelayMs", 0L),
@@ -195,7 +204,7 @@ data class ClickConfig(
             val arr = obj.optJSONArray("targets")
             if (arr != null) {
                 for (i in 0 until arr.length()) {
-                    val item = arr.getJSONObject(i)
+                    val item = arr.optJSONObject(i) ?: continue
                     cfg.targets.add(
                         TargetPoint(
                             id = item.optInt("id", i + 1),
@@ -209,18 +218,18 @@ data class ClickConfig(
                             startAtHour = item.optInt("startAtHour", 12),
                             startAtMinute = item.optInt("startAtMinute", 0),
                             startAtSecond = item.optInt("startAtSecond", 0),
-                            customStartDelayMs = if (item.has("customStartDelayMs")) item.getLong("customStartDelayMs") else null,
-                            customStartDelayRandomMs = if (item.has("customStartDelayRandomMs")) item.getLong("customStartDelayRandomMs") else null,
-                            customEndDelayMs = if (item.has("customEndDelayMs")) item.getLong("customEndDelayMs") else null,
-                            customEndDelayRandomMs = if (item.has("customEndDelayRandomMs")) item.getLong("customEndDelayRandomMs") else null,
-                            customDurationValue = if (item.has("customDurationValue")) item.getLong("customDurationValue") else null,
-                            customDurationUnit = if (item.has("customDurationUnit")) {
+                            customStartDelayMs = if (!item.isNull("customStartDelayMs")) item.getLong("customStartDelayMs") else null,
+                            customStartDelayRandomMs = if (!item.isNull("customStartDelayRandomMs")) item.getLong("customStartDelayRandomMs") else null,
+                            customEndDelayMs = if (!item.isNull("customEndDelayMs")) item.getLong("customEndDelayMs") else null,
+                            customEndDelayRandomMs = if (!item.isNull("customEndDelayRandomMs")) item.getLong("customEndDelayRandomMs") else null,
+                            customDurationValue = if (!item.isNull("customDurationValue")) item.getLong("customDurationValue") else null,
+                            customDurationUnit = if (!item.isNull("customDurationUnit")) {
                                 runCatching { TimeUnitType.valueOf(item.getString("customDurationUnit")) }.getOrNull()
                             } else null,
-                            customDurationMs = if (item.has("customDurationMs")) item.getLong("customDurationMs") else null,
+                            customDurationMs = if (!item.isNull("customDurationMs")) item.getLong("customDurationMs") else null,
                             repeatCount = item.optInt("repeatCount", 0),
                             disableAfterRuns = item.optInt("disableAfterRuns", 0),
-                            customRandomizationRadiusPx = if (item.has("customRandomizationRadiusPx")) item.getInt("customRandomizationRadiusPx") else null
+                            customRandomizationRadiusPx = if (!item.isNull("customRandomizationRadiusPx")) item.getInt("customRandomizationRadiusPx") else null
                         )
                     )
                 }
@@ -230,7 +239,62 @@ data class ClickConfig(
     }
 }
 
+data class BackupPayload(
+    val activeConfig: ClickConfig,
+    val savedPresets: List<String>,
+    val autoStartPackages: Set<String>
+)
+
 object ConfigStore {
     var activeConfig: ClickConfig = ClickConfig()
     val autoStartPackages: MutableSet<String> = mutableSetOf()
+
+    fun parseBackupJson(raw: String): BackupPayload {
+        val cleaned = ClickConfig.sanitizeJson(raw)
+        val root = JSONObject(cleaned)
+
+        val format = root.optString("format", "")
+        if (format != "QuickClickBackup") {
+            throw IllegalArgumentException("Invalid backup format: $format")
+        }
+
+        val parsedActive = when {
+            root.optJSONObject("activeConfig") != null ->
+                ClickConfig.fromJson(root.getJSONObject("activeConfig"))
+            root.optString("activeConfig", "").isNotBlank() ->
+                ClickConfig.fromJson(root.getString("activeConfig"))
+            else -> throw IllegalArgumentException("Missing activeConfig")
+        }
+
+        val parsedPresets = mutableListOf<String>()
+        val presetsArr = root.optJSONArray("savedPresets")
+        if (presetsArr != null) {
+            for (i in 0 until presetsArr.length()) {
+                val presetObj = presetsArr.optJSONObject(i)
+                if (presetObj != null) {
+                    parsedPresets.add(ClickConfig.fromJson(presetObj).toJson())
+                } else {
+                    val presetStr = presetsArr.optString(i, "")
+                    if (presetStr.isNotBlank()) {
+                        parsedPresets.add(ClickConfig.fromJson(presetStr).toJson())
+                    }
+                }
+            }
+        }
+
+        val parsedPackages = mutableSetOf<String>()
+        val pkgArr = root.optJSONArray("autoStartPackages")
+        if (pkgArr != null) {
+            for (i in 0 until pkgArr.length()) {
+                val pkg = pkgArr.optString(i, "").trim()
+                if (pkg.isNotEmpty()) parsedPackages.add(pkg)
+            }
+        }
+
+        return BackupPayload(
+            activeConfig = parsedActive,
+            savedPresets = parsedPresets,
+            autoStartPackages = parsedPackages
+        )
+    }
 }
