@@ -169,7 +169,7 @@ class MainActivity : AppCompatActivity() {
         }
         headerRow.addView(logoBadge)
         headerRow.addView(TextView(this).apply {
-            text = "QuickClick"
+            text = getString(R.string.app_name)
             textSize = 25f
             setTypeface(null, Typeface.BOLD)
             setTextColor(Color.WHITE)
@@ -328,7 +328,7 @@ class MainActivity : AppCompatActivity() {
             orientation = LinearLayout.VERTICAL
             layoutParams = LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f)
             addView(TextView(context).apply {
-                text = "QuickClick"
+                text = this@MainActivity.getString(R.string.app_name)
                 textSize = 16.5f
                 setTypeface(null, Typeface.BOLD)
                 setTextColor(Color.WHITE)
