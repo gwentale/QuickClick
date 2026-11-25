@@ -3,17 +3,24 @@ plugins {
     id("org.jetbrains.kotlin.android")
 }
 
+val isDevBuild = System.getenv("IS_DEV_BUILD")?.equals("true", ignoreCase = true) ?: false
+
 android {
     namespace = "com.app.autoclicker"
     compileSdk = 34
 
     defaultConfig {
         applicationId = "com.app.autoclicker"
-        applicationIdSuffix = ".dev"
+        if (isDevBuild) {
+            applicationIdSuffix = ".dev"
+            resValue("string", "app_name", "QuickClick Dev")
+        } else {
+            resValue("string", "app_name", "QuickClick")
+        }
         minSdk = 24
         targetSdk = 34
         versionCode = System.getenv("APP_VERSION_CODE")?.toIntOrNull() ?: 1
-        versionName = System.getenv("APP_VERSION_NAME") ?: "1.0.0-dev"
+        versionName = System.getenv("APP_VERSION_NAME") ?: if (isDevBuild) "1.0.0-dev" else "1.0.0"
     }
 
     signingConfigs {
