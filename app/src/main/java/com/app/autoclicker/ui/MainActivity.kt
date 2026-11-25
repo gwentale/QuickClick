@@ -35,7 +35,7 @@ class MainActivity : AppCompatActivity() {
 
         rootContainer = LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
-            setPadding(48, 56, 48, 48)
+            setPadding(40, 48, 40, 48)
         }
 
         scroll.addView(rootContainer)
@@ -71,16 +71,14 @@ class MainActivity : AppCompatActivity() {
     private fun renderUI() {
         rootContainer.removeAllViews()
 
-        // App Title Header
         rootContainer.addView(TextView(this).apply {
             text = "QuickClick"
             textSize = 26f
             setTypeface(null, Typeface.BOLD)
             setTextColor(Color.WHITE)
-            setPadding(0, 0, 0, 36)
+            setPadding(4, 0, 0, 24)
         })
 
-        // Section: Permissions & Stability
         addSectionLabel("SYSTEM REQUIREMENTS")
 
         val overlayGranted = Settings.canDrawOverlays(this)
@@ -121,7 +119,6 @@ class MainActivity : AppCompatActivity() {
             }
         }
 
-        // Section: Controls
         addSectionLabel("CONTROLS")
 
         addPrimaryButton("START MULTI-TARGET MODE") {
@@ -140,7 +137,7 @@ class MainActivity : AppCompatActivity() {
             startActivity(Intent(this, SettingsActivity::class.java))
         }
 
-        addSecondaryButton("Auto-Start Apps") {
+        addSecondaryButton("Auto-Open Settings") {
             startActivity(Intent(this, AutoStartActivity::class.java))
         }
     }
@@ -152,7 +149,7 @@ class MainActivity : AppCompatActivity() {
             letterSpacing = 0.1f
             setTypeface(null, Typeface.BOLD)
             setTextColor(Color.parseColor("#8A8F9E"))
-            setPadding(4, 24, 0, 14)
+            setPadding(4, 24, 0, 12)
         })
     }
 
@@ -160,22 +157,23 @@ class MainActivity : AppCompatActivity() {
         val card = LinearLayout(this).apply {
             orientation = LinearLayout.HORIZONTAL
             gravity = Gravity.CENTER_VERTICAL
-            setPadding(36, 32, 36, 32)
+            setPadding(36, 30, 36, 30)
             background = GradientDrawable().apply {
                 setColor(Color.parseColor("#1A1D24"))
-                cornerRadius = 28f
+                cornerRadius = 24f
                 setStroke(2, Color.parseColor("#282C37"))
             }
             layoutParams = LinearLayout.LayoutParams(
                 LinearLayout.LayoutParams.MATCH_PARENT,
                 LinearLayout.LayoutParams.WRAP_CONTENT
-            ).apply { bottomMargin = 20 }
+            ).apply { bottomMargin = 16 }
             setOnClickListener { onClick() }
         }
 
         val tvTitle = TextView(this).apply {
             text = title
             textSize = 15f
+            setTypeface(null, Typeface.BOLD)
             setTextColor(Color.parseColor("#F1F3F6"))
             layoutParams = LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f)
         }
@@ -204,15 +202,15 @@ class MainActivity : AppCompatActivity() {
             setTypeface(null, Typeface.BOLD)
             setTextColor(Color.WHITE)
             gravity = Gravity.CENTER
-            setPadding(32, 38, 32, 38)
+            setPadding(36, 34, 36, 34)
             background = GradientDrawable().apply {
                 setColor(Color.parseColor("#2979FF"))
-                cornerRadius = 28f
+                cornerRadius = 24f
             }
             layoutParams = LinearLayout.LayoutParams(
                 LinearLayout.LayoutParams.MATCH_PARENT,
                 LinearLayout.LayoutParams.WRAP_CONTENT
-            ).apply { bottomMargin = 20 }
+            ).apply { bottomMargin = 16 }
             setOnClickListener { onClick() }
         }
         rootContainer.addView(btn)
@@ -222,18 +220,19 @@ class MainActivity : AppCompatActivity() {
         val btn = TextView(this).apply {
             text = label
             textSize = 15f
+            setTypeface(null, Typeface.BOLD)
             setTextColor(Color.parseColor("#E2E8F0"))
             gravity = Gravity.CENTER
-            setPadding(32, 34, 32, 34)
+            setPadding(36, 32, 36, 32)
             background = GradientDrawable().apply {
                 setColor(Color.parseColor("#1A1D24"))
-                cornerRadius = 28f
+                cornerRadius = 24f
                 setStroke(2, Color.parseColor("#282C37"))
             }
             layoutParams = LinearLayout.LayoutParams(
                 LinearLayout.LayoutParams.MATCH_PARENT,
                 LinearLayout.LayoutParams.WRAP_CONTENT
-            ).apply { bottomMargin = 18 }
+            ).apply { bottomMargin = 16 }
             setOnClickListener { onClick() }
         }
         rootContainer.addView(btn)
