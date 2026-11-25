@@ -58,6 +58,15 @@ class AutoClickerService : AccessibilityService() {
     private lateinit var btnCollapse: ImageView
 
     private val targetViews = mutableListOf<View>()
+
+    private data class TargetBubbleRecord(
+        val view: View,
+        val params: WindowManager.LayoutParams,
+        val point: TargetPoint,
+        val isEndNode: Boolean
+    )
+
+    private val targetBubbleRecords = mutableListOf<TargetBubbleRecord>()
     private val serviceScope = CoroutineScope(Dispatchers.Default + SupervisorJob())
     private var clickJob: Job? = null
 
@@ -352,9 +361,14 @@ class AutoClickerService : AccessibilityService() {
                 layoutInDisplayCutoutMode =
                     WindowManager.LayoutParams.LAYOUT_IN_DISPLAY_CUTOUT_MODE_SHORT_EDGES
             }
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
+                fitInsetsTypes = 0
+            }
             x = (if (isEndNode) point.endX else point.x).toInt() - 48
             y = (if (isEndNode) point.endY else point.y).toInt() - 48
         }
+
+        val record = TargetBubbleRecord(bubble, params, point, isEndNode)
 
         var initX = 0; var initY = 0; var touchX = 0f; var touchY = 0f
         var moved = false
@@ -375,20 +389,20 @@ class AutoClickerService : AccessibilityService() {
                         params.x = initX + dx
                         params.y = initY + dy
                         windowManager.updateViewLayout(bubble, params)
-                        val loc = IntArray(2)
-                        bubble.getLocationOnScreen(loc)
                         if (isEndNode) {
-                            point.endX = loc[0] + 48f
-                            point.endY = loc[1] + 48f
+                            point.endX = params.x + 48f
+                            point.endY = params.y + 48f
                         } else {
-                            point.x = loc[0] + 48f
-                            point.y = loc[1] + 48f
+                            point.x = params.x + 48f
+                            point.y = params.y + 48f
                         }
                     }
                     true
                 }
                 MotionEvent.ACTION_UP -> {
-                    if (!moved && !isRunning && ConfigStore.activeConfig.targetProgrammability) {
+                    if (moved) {
+                        bubble.post { syncTargetFromBubble(record) }
+                    } else if (!isRunning && ConfigStore.activeConfig.targetProgrammability) {
                         openEditTargetDialog(point)
                     }
                     true
@@ -398,20 +412,50 @@ class AutoClickerService : AccessibilityService() {
         }
 
         windowManager.addView(bubble, params)
-        bubble.post {
-            val loc = IntArray(2)
-            bubble.getLocationOnScreen(loc)
-            if (loc[0] != 0 || loc[1] != 0) {
-                if (isEndNode) {
-                    point.endX = loc[0] + 48f
-                    point.endY = loc[1] + 48f
-                } else {
-                    point.x = loc[0] + 48f
-                    point.y = loc[1] + 48f
+        targetViews.add(bubble)
+        targetBubbleRecords.add(record)
+    }
+
+    private fun syncTargetFromBubble(record: TargetBubbleRecord) {
+        val v = record.view
+        if (!v.isAttachedToWindow || v.visibility == View.GONE) return
+        val w = if (v.width > 0) v.width else 96
+        val h = if (v.height > 0) v.height else 96
+        val loc = IntArray(2)
+        v.getLocationOnScreen(loc)
+        val cx = loc[0] + (w / 2f)
+        val cy = loc[1] + (h / 2f)
+        if (cx > 0f && cy > 0f) {
+            if (record.isEndNode) {
+                record.point.endX = cx
+                record.point.endY = cy
+            } else {
+                record.point.x = cx
+                record.point.y = cy
+            }
+        }
+    }
+
+    private fun syncAllTargetsFromBubbles() {
+        targetBubbleRecords.forEach { syncTargetFromBubble(it) }
+    }
+
+    private fun setTargetBubblesTouchable(touchable: Boolean) {
+        targetBubbleRecords.forEach { rec ->
+            val newFlags = if (touchable) {
+                rec.params.flags and WindowManager.LayoutParams.FLAG_NOT_TOUCHABLE.inv()
+            } else {
+                rec.params.flags or WindowManager.LayoutParams.FLAG_NOT_TOUCHABLE
+            }
+            if (rec.params.flags != newFlags) {
+                rec.params.flags = newFlags
+                if (rec.view.isAttachedToWindow) {
+                    try {
+                        windowManager.updateViewLayout(rec.view, rec.params)
+                    } catch (_: Exception) {}
                 }
             }
         }
-        targetViews.add(bubble)
     }
 
     private fun openEditTargetDialog(point: TargetPoint) {
@@ -710,6 +754,9 @@ class AutoClickerService : AccessibilityService() {
             if (targetViews.isNotEmpty()) {
                 try { windowManager.removeView(targetViews.removeAt(targetViews.lastIndex)) } catch (_: Exception) {}
             }
+            if (targetBubbleRecords.isNotEmpty()) {
+                targetBubbleRecords.removeAt(targetBubbleRecords.lastIndex)
+            }
         }
     }
 
@@ -718,6 +765,7 @@ class AutoClickerService : AccessibilityService() {
             try { windowManager.removeView(it) } catch (_: Exception) {}
         }
         targetViews.clear()
+        targetBubbleRecords.clear()
     }
 
     private fun clearAllTargets() {
@@ -736,6 +784,7 @@ class AutoClickerService : AccessibilityService() {
             return
         }
 
+        syncAllTargetsFromBubbles()
         rhythmStepCounter = 0
         clickJob?.cancel()
         clickJob = serviceScope.launch {
@@ -775,6 +824,8 @@ class AutoClickerService : AccessibilityService() {
 
             isRunning = true
             withContext(Dispatchers.Main) {
+                syncAllTargetsFromBubbles()
+                setTargetBubblesTouchable(false)
                 btnPlay.setImageResource(R.drawable.ic_pause)
                 btnPlay.imageTintList = ColorStateList.valueOf(Color.parseColor("#34D399"))
                 if (!cfg.showActiveTargets || isGhostMode || isBurstMode) {
@@ -840,7 +891,7 @@ class AutoClickerService : AccessibilityService() {
 
                         // 3. Humanized 2D Gaussian Scatter + Quadratic Bezier Micro-Drift
                         val baseRad = target.customRandomizationRadiusPx ?: cfg.randomizationRadiusPx
-                        val effectiveRadius = if (isGhostMode) maxOf(baseRad, 7) else baseRad
+                        val effectiveRadius = if (isGhostMode) maxOf(baseRad, 4) else baseRad
 
                         withTimeoutOrNull(duration + 450L) {
                             performHumanizedGestureSuspend(target, duration, effectiveRadius, isGhostMode)
@@ -869,7 +920,10 @@ class AutoClickerService : AccessibilityService() {
                         perTargetRunCounts[target.id] = runsDone
                         if (target.disableAfterRuns > 0 && runsDone >= target.disableAfterRuns) {
                             target.enabled = false
-                            withContext(Dispatchers.Main) { rebuildAllTargetBubbles() }
+                            withContext(Dispatchers.Main) {
+                                rebuildAllTargetBubbles()
+                                setTargetBubblesTouchable(false)
+                            }
                         }
                     }
                 }
@@ -912,6 +966,7 @@ class AutoClickerService : AccessibilityService() {
             btnPlay.imageTintList = ColorStateList.valueOf(Color.WHITE)
         }
         controlBarView?.alpha = 1.0f
+        setTargetBubblesTouchable(true)
         targetViews.forEach { it.visibility = if (isCollapsed) View.GONE else View.VISIBLE }
     }
 
@@ -1038,11 +1093,15 @@ class AutoClickerService : AccessibilityService() {
         radiusPx: Int,
         ghostMode: Boolean
     ) = suspendCancellableCoroutine { cont ->
-        val (sx, sy) = applyHumanizedOffset(target.x, target.y, radiusPx, ghostMode)
+        val (rawSx, rawSy) = applyHumanizedOffset(target.x, target.y, radiusPx, ghostMode)
+        val sx = rawSx.coerceAtLeast(1f)
+        val sy = rawSy.coerceAtLeast(1f)
         val path = Path().apply {
             moveTo(sx, sy)
             if (target.isSwipe) {
-                val (ex, ey) = applyHumanizedOffset(target.endX, target.endY, radiusPx, ghostMode)
+                val (rawEx, rawEy) = applyHumanizedOffset(target.endX, target.endY, radiusPx, ghostMode)
+                val ex = rawEx.coerceAtLeast(1f)
+                val ey = rawEy.coerceAtLeast(1f)
                 if (ghostMode) {
                     // Curved Quadratic Bezier swipe trajectory mimicking thumb/finger arc
                     val dx = ex - sx
@@ -1053,8 +1112,8 @@ class AutoClickerService : AccessibilityService() {
                     val maxArc = (dist * 0.08f).coerceIn(6f, 28f)
                     val arcOffset = gaussianClamped(0.0, maxArc * 0.55, -maxArc.toDouble(), maxArc.toDouble()).toFloat()
                     val t = gaussianClamped(0.50, 0.08, 0.35, 0.65).toFloat()
-                    val ctrlX = sx + dx * t + perpX * arcOffset
-                    val ctrlY = sy + dy * t + perpY * arcOffset
+                    val ctrlX = (sx + dx * t + perpX * arcOffset).coerceAtLeast(1f)
+                    val ctrlY = (sy + dy * t + perpY * arcOffset).coerceAtLeast(1f)
                     quadTo(ctrlX, ctrlY, ex, ey)
                 } else {
                     lineTo(ex, ey)
@@ -1063,13 +1122,13 @@ class AutoClickerService : AccessibilityService() {
                 // Curved Bezier micro-drift (1.2 - 4.2 px) simulating fingertip skin roll on glass
                 val driftAngle = Random.nextDouble(0.0, 2.0 * PI)
                 val driftDist = gaussianClamped(mean = 2.4, stdDev = 0.75, minVal = 1.1, maxVal = 4.3).toFloat()
-                val ex = sx + (driftDist * cos(driftAngle)).toFloat()
-                val ey = sy + (driftDist * sin(driftAngle)).toFloat()
+                val ex = (sx + (driftDist * cos(driftAngle)).toFloat()).coerceAtLeast(1f)
+                val ey = (sy + (driftDist * sin(driftAngle)).toFloat()).coerceAtLeast(1f)
 
                 val bowAngle = driftAngle + (if (Random.nextBoolean()) PI / 2.0 else -PI / 2.0)
                 val bowDist = driftDist * 0.45f
-                val ctrlX = (sx + ex) * 0.5f + (bowDist * cos(bowAngle)).toFloat()
-                val ctrlY = (sy + ey) * 0.5f + (bowDist * sin(bowAngle)).toFloat()
+                val ctrlX = ((sx + ex) * 0.5f + (bowDist * cos(bowAngle)).toFloat()).coerceAtLeast(1f)
+                val ctrlY = ((sy + ey) * 0.5f + (bowDist * sin(bowAngle)).toFloat()).coerceAtLeast(1f)
                 quadTo(ctrlX, ctrlY, ex, ey)
             }
         }
