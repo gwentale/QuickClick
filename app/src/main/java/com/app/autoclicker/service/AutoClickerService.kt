@@ -70,6 +70,9 @@ class AutoClickerService : AccessibilityService() {
     private val serviceScope = CoroutineScope(Dispatchers.Default + SupervisorJob())
     private var clickJob: Job? = null
 
+    private var overlayOffsetX = 0f
+    private var overlayOffsetY = 0f
+
     @Volatile
     private var isRunning = false
 
@@ -364,8 +367,10 @@ class AutoClickerService : AccessibilityService() {
             if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
                 fitInsetsTypes = 0
             }
-            x = (if (isEndNode) point.endX else point.x).toInt() - 48
-            y = (if (isEndNode) point.endY else point.y).toInt() - 48
+            val targetX = if (isEndNode) point.endX else point.x
+            val targetY = if (isEndNode) point.endY else point.y
+            x = (targetX - 48f - overlayOffsetX).toInt()
+            y = (targetY - 48f - overlayOffsetY).toInt()
         }
 
         val record = TargetBubbleRecord(bubble, params, point, isEndNode)
@@ -373,12 +378,17 @@ class AutoClickerService : AccessibilityService() {
         var initX = 0; var initY = 0; var touchX = 0f; var touchY = 0f
         var moved = false
 
-        bubble.setOnTouchListener { _, e ->
+        bubble.setOnTouchListener { v, e ->
+            val w = if (v.width > 0) v.width else 96
+            val h = if (v.height > 0) v.height else 96
+
             when (e.action) {
                 MotionEvent.ACTION_DOWN -> {
                     initX = params.x; initY = params.y
                     touchX = e.rawX; touchY = e.rawY
                     moved = false
+                    overlayOffsetX = (e.rawX - e.x) - params.x
+                    overlayOffsetY = (e.rawY - e.y) - params.y
                     true
                 }
                 MotionEvent.ACTION_MOVE -> {
@@ -389,19 +399,29 @@ class AutoClickerService : AccessibilityService() {
                         params.x = initX + dx
                         params.y = initY + dy
                         windowManager.updateViewLayout(bubble, params)
+                        val screenCenterX = params.x + overlayOffsetX + (w / 2f)
+                        val screenCenterY = params.y + overlayOffsetY + (h / 2f)
                         if (isEndNode) {
-                            point.endX = params.x + 48f
-                            point.endY = params.y + 48f
+                            point.endX = screenCenterX
+                            point.endY = screenCenterY
                         } else {
-                            point.x = params.x + 48f
-                            point.y = params.y + 48f
+                            point.x = screenCenterX
+                            point.y = screenCenterY
                         }
                     }
                     true
                 }
                 MotionEvent.ACTION_UP -> {
                     if (moved) {
-                        bubble.post { syncTargetFromBubble(record) }
+                        val screenCenterX = e.rawX - e.x + (w / 2f)
+                        val screenCenterY = e.rawY - e.y + (h / 2f)
+                        if (isEndNode) {
+                            point.endX = screenCenterX
+                            point.endY = screenCenterY
+                        } else {
+                            point.x = screenCenterX
+                            point.y = screenCenterY
+                        }
                     } else if (!isRunning && ConfigStore.activeConfig.targetProgrammability) {
                         openEditTargetDialog(point)
                     }
@@ -414,30 +434,6 @@ class AutoClickerService : AccessibilityService() {
         windowManager.addView(bubble, params)
         targetViews.add(bubble)
         targetBubbleRecords.add(record)
-    }
-
-    private fun syncTargetFromBubble(record: TargetBubbleRecord) {
-        val v = record.view
-        if (!v.isAttachedToWindow || v.visibility == View.GONE) return
-        val w = if (v.width > 0) v.width else 96
-        val h = if (v.height > 0) v.height else 96
-        val loc = IntArray(2)
-        v.getLocationOnScreen(loc)
-        val cx = loc[0] + (w / 2f)
-        val cy = loc[1] + (h / 2f)
-        if (cx > 0f && cy > 0f) {
-            if (record.isEndNode) {
-                record.point.endX = cx
-                record.point.endY = cy
-            } else {
-                record.point.x = cx
-                record.point.y = cy
-            }
-        }
-    }
-
-    private fun syncAllTargetsFromBubbles() {
-        targetBubbleRecords.forEach { syncTargetFromBubble(it) }
     }
 
     private fun setTargetBubblesTouchable(touchable: Boolean) {
@@ -784,7 +780,6 @@ class AutoClickerService : AccessibilityService() {
             return
         }
 
-        syncAllTargetsFromBubbles()
         rhythmStepCounter = 0
         clickJob?.cancel()
         clickJob = serviceScope.launch {
@@ -824,7 +819,6 @@ class AutoClickerService : AccessibilityService() {
 
             isRunning = true
             withContext(Dispatchers.Main) {
-                syncAllTargetsFromBubbles()
                 setTargetBubblesTouchable(false)
                 btnPlay.setImageResource(R.drawable.ic_pause)
                 btnPlay.imageTintList = ColorStateList.valueOf(Color.parseColor("#34D399"))
