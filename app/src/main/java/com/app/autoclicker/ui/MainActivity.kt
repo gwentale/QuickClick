@@ -13,6 +13,7 @@ import android.graphics.ColorFilter
 import android.graphics.Paint
 import android.graphics.Path
 import android.graphics.PixelFormat
+import android.graphics.RectF
 import android.graphics.Typeface
 import android.graphics.drawable.Drawable
 import android.graphics.drawable.GradientDrawable
@@ -47,7 +48,10 @@ class MainActivity : AppCompatActivity() {
     private var isBatteryDescExpanded = false
 
     companion object {
+        private const val AUTHOR_HANDLE = "@gwentale"
+        private const val GITHUB_PROFILE_URL = "https://github.com/gwentale"
         private const val GITHUB_REPO_URL = "https://github.com/gwentale/QuickClick"
+        private const val SIMPLEHAT_APKPURE_URL = "https://apkpure.com/quicktouch-automatic-clicker/com.simplehat.clicker"
     }
 
     private fun Int.dp(): Int = (this * resources.displayMetrics.density).toInt()
@@ -142,6 +146,20 @@ class MainActivity : AppCompatActivity() {
         } catch (_: Exception) {
             1L
         }
+    }
+
+    private fun openExternalUrl(url: String) {
+        runCatching {
+            startActivity(Intent(Intent.ACTION_VIEW, Uri.parse(url)))
+        }.onFailure {
+            Toast.makeText(this, "No browser found", Toast.LENGTH_SHORT).show()
+        }
+    }
+
+    private fun copyTextToClipboard(label: String, text: String, toastMsg: String) {
+        val cm = getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager
+        cm.setPrimaryClip(ClipData.newPlainText(label, text))
+        Toast.makeText(this, toastMsg, Toast.LENGTH_SHORT).show()
     }
 
     private fun renderUI() {
@@ -306,7 +324,7 @@ class MainActivity : AppCompatActivity() {
         val headerBox = LinearLayout(this).apply {
             orientation = LinearLayout.HORIZONTAL
             gravity = Gravity.CENTER_VERTICAL
-            setPadding(12.dp(), 12.dp(), 12.dp(), 12.dp())
+            setPadding(12.dp(), 12.dp(), 10.dp(), 12.dp())
             background = GradientDrawable().apply {
                 setColor(Color.parseColor("#12151C"))
                 cornerRadius = 12f.dpF()
@@ -321,26 +339,81 @@ class MainActivity : AppCompatActivity() {
         headerBox.addView(ImageView(this).apply {
             setImageResource(R.drawable.ic_target)
             imageTintList = ColorStateList.valueOf(Color.parseColor("#60A5FA"))
-            layoutParams = LinearLayout.LayoutParams(30.dp(), 30.dp()).apply { rightMargin = 12.dp() }
+            layoutParams = LinearLayout.LayoutParams(28.dp(), 28.dp()).apply { rightMargin = 10.dp() }
         })
 
         val titleCol = LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
-            layoutParams = LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f)
+            layoutParams = LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f).apply {
+                rightMargin = 8.dp()
+            }
             addView(TextView(context).apply {
                 text = this@MainActivity.getString(R.string.app_name)
-                textSize = 16.5f
+                textSize = 15.5f
                 setTypeface(null, Typeface.BOLD)
                 setTextColor(Color.WHITE)
             })
             addView(TextView(context).apply {
                 text = "Version ${getAppVersionName()} (Build ${getAppVersionCode()})"
-                textSize = 12f
+                textSize = 11.5f
                 setTextColor(Color.parseColor("#8A8F9E"))
                 setPadding(0, 2.dp(), 0, 0)
             })
         }
         headerBox.addView(titleCol)
+
+        // Mini @gwentale GitHub Pill on the Right Side of Version Card (Redirect + Copy)
+        val authorPill = LinearLayout(this).apply {
+            orientation = LinearLayout.HORIZONTAL
+            gravity = Gravity.CENTER_VERTICAL
+            background = GradientDrawable().apply {
+                setColor(Color.parseColor("#1A212E"))
+                cornerRadius = 8f.dpF()
+                setStroke(1.dp(), Color.parseColor("#2E384D"))
+            }
+        }
+
+        val authorLinkArea = LinearLayout(this).apply {
+            orientation = LinearLayout.HORIZONTAL
+            gravity = Gravity.CENTER_VERTICAL
+            setPadding(8.dp(), 6.dp(), 7.dp(), 6.dp())
+            setOnClickListener { openExternalUrl(GITHUB_PROFILE_URL) }
+            setOnLongClickListener {
+                copyTextToClipboard("Author Handle", AUTHOR_HANDLE, "Copied $AUTHOR_HANDLE")
+                true
+            }
+            addView(ImageView(context).apply {
+                setImageResource(R.drawable.ic_github)
+                imageTintList = ColorStateList.valueOf(Color.parseColor("#E2E8F0"))
+                layoutParams = LinearLayout.LayoutParams(13.dp(), 13.dp()).apply { rightMargin = 5.dp() }
+            })
+            addView(TextView(context).apply {
+                text = AUTHOR_HANDLE
+                textSize = 11f
+                setTypeface(null, Typeface.BOLD)
+                setTextColor(Color.parseColor("#E2E8F0"))
+            })
+        }
+
+        val pillDivider = View(this).apply {
+            setBackgroundColor(Color.parseColor("#2E384D"))
+            layoutParams = LinearLayout.LayoutParams(1.dp(), 16.dp())
+        }
+
+        val btnCopyHandle = ImageView(this).apply {
+            setImageDrawable(createCopyDrawable(Color.parseColor("#94A3B8")))
+            setPadding(6.dp(), 6.dp(), 7.dp(), 6.dp())
+            layoutParams = LinearLayout.LayoutParams(25.dp(), 25.dp())
+            setOnClickListener {
+                copyTextToClipboard("Author Handle", AUTHOR_HANDLE, "Copied $AUTHOR_HANDLE")
+            }
+        }
+
+        authorPill.addView(authorLinkArea)
+        authorPill.addView(pillDivider)
+        authorPill.addView(btnCopyHandle)
+        headerBox.addView(authorPill)
+
         content.addView(headerBox)
 
         // Brief Specifications Card
@@ -416,7 +489,7 @@ class MainActivity : AppCompatActivity() {
             layoutParams = LinearLayout.LayoutParams(
                 LinearLayout.LayoutParams.MATCH_PARENT,
                 LinearLayout.LayoutParams.WRAP_CONTENT
-            )
+            ).apply { bottomMargin = 12.dp() }
         }
 
         repoCard.addView(TextView(this).apply {
@@ -445,13 +518,7 @@ class MainActivity : AppCompatActivity() {
             layoutParams = LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f).apply {
                 rightMargin = 6.dp()
             }
-            setOnClickListener {
-                runCatching {
-                    startActivity(Intent(Intent.ACTION_VIEW, Uri.parse(GITHUB_REPO_URL)))
-                }.onFailure {
-                    Toast.makeText(this@MainActivity, "No browser found", Toast.LENGTH_SHORT).show()
-                }
-            }
+            setOnClickListener { openExternalUrl(GITHUB_REPO_URL) }
         }
 
         val btnCopyRepo = TextView(this).apply {
@@ -469,9 +536,7 @@ class MainActivity : AppCompatActivity() {
                 leftMargin = 6.dp()
             }
             setOnClickListener {
-                val cm = getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager
-                cm.setPrimaryClip(ClipData.newPlainText("QuickClick GitHub", GITHUB_REPO_URL))
-                Toast.makeText(this@MainActivity, "GitHub link copied", Toast.LENGTH_SHORT).show()
+                copyTextToClipboard("QuickClick GitHub", GITHUB_REPO_URL, "GitHub link copied")
             }
         }
 
@@ -479,6 +544,47 @@ class MainActivity : AppCompatActivity() {
         btnRow.addView(btnCopyRepo)
         repoCard.addView(btnRow)
         content.addView(repoCard)
+
+        // Inspired by SimpleHat + APKPure Link Section
+        content.addView(TextView(this).apply {
+            text = "CREDITS"
+            textSize = 11f
+            letterSpacing = 0.08f
+            setTypeface(null, Typeface.BOLD)
+            setTextColor(Color.parseColor("#60A5FA"))
+            setPadding(2.dp(), 0, 0, 6.dp())
+        })
+
+        val creditCard = LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
+            setPadding(12.dp(), 10.dp(), 12.dp(), 10.dp())
+            background = GradientDrawable().apply {
+                setColor(Color.parseColor("#12151C"))
+                cornerRadius = 12f.dpF()
+                setStroke(1.dp(), Color.parseColor("#282C37"))
+            }
+            layoutParams = LinearLayout.LayoutParams(
+                LinearLayout.LayoutParams.MATCH_PARENT,
+                LinearLayout.LayoutParams.WRAP_CONTENT
+            )
+            setOnClickListener { openExternalUrl(SIMPLEHAT_APKPURE_URL) }
+        }
+
+        creditCard.addView(TextView(this).apply {
+            text = "Inspired by SimpleHat"
+            textSize = 12.5f
+            setTypeface(null, Typeface.BOLD)
+            setTextColor(Color.parseColor("#E2E8F0"))
+            setPadding(0, 0, 0, 3.dp())
+        })
+
+        creditCard.addView(TextView(this).apply {
+            text = SIMPLEHAT_APKPURE_URL
+            textSize = 11.5f
+            setTextColor(Color.parseColor("#60A5FA"))
+        })
+
+        content.addView(creditCard)
 
         DialogHelper.showStyledDialog(this, "About App", content, null, "CLOSE", false)
     }
@@ -703,6 +809,49 @@ class MainActivity : AppCompatActivity() {
         }
     }
 
+    private fun createCopyDrawable(color: Int): Drawable {
+        return object : Drawable() {
+            private val paint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+                this.color = color
+                style = Paint.Style.STROKE
+                strokeWidth = 1.4f.dpF()
+                strokeCap = Paint.Cap.ROUND
+                strokeJoin = Paint.Join.ROUND
+            }
+
+            override fun draw(canvas: Canvas) {
+                val w = bounds.width().toFloat()
+                val h = bounds.height().toFloat()
+                val r = w * 0.12f
+
+                // Back sheet corner
+                val backPath = Path().apply {
+                    moveTo(w * 0.36f, h * 0.24f)
+                    lineTo(w * 0.36f, h * 0.16f)
+                    lineTo(w * 0.84f, h * 0.16f)
+                    lineTo(w * 0.84f, h * 0.64f)
+                    lineTo(w * 0.76f, h * 0.64f)
+                }
+                canvas.drawPath(backPath, paint)
+
+                // Front sheet
+                val frontRect = RectF(w * 0.16f, h * 0.36f, w * 0.64f, h * 0.84f)
+                canvas.drawRoundRect(frontRect, r, r, paint)
+            }
+
+            override fun setAlpha(alpha: Int) {
+                paint.alpha = alpha
+            }
+
+            override fun setColorFilter(colorFilter: ColorFilter?) {
+                paint.colorFilter = colorFilter
+            }
+
+            @Deprecated("Deprecated in Java")
+            override fun getOpacity(): Int = PixelFormat.TRANSLUCENT
+        }
+    }
+
     private fun createDivider(): View {
         return View(this).apply {
             setBackgroundColor(Color.parseColor("#282C37"))
@@ -787,7 +936,7 @@ class MainActivity : AppCompatActivity() {
     private fun addPrimaryButton(iconRes: Int, label: String, bgColor: String, onClick: () -> Unit) {
         val btn = LinearLayout(this).apply {
             orientation = LinearLayout.HORIZONTAL
-            gravity = Gravity.CENTER
+            gravity = Gravity.CENTER_VERTICAL
             setPadding(16.dp(), 15.dp(), 16.dp(), 15.dp())
             background = GradientDrawable().apply {
                 setColor(Color.parseColor(bgColor))
@@ -803,7 +952,7 @@ class MainActivity : AppCompatActivity() {
         btn.addView(ImageView(this).apply {
             setImageResource(iconRes)
             imageTintList = ColorStateList.valueOf(Color.WHITE)
-            layoutParams = LinearLayout.LayoutParams(20.dp(), 20.dp()).apply { rightMargin = 8.dp() }
+            layoutParams = LinearLayout.LayoutParams(20.dp(), 20.dp()).apply { rightMargin = 12.dp() }
         })
 
         btn.addView(TextView(this).apply {
@@ -811,6 +960,7 @@ class MainActivity : AppCompatActivity() {
             textSize = 15f
             setTypeface(null, Typeface.BOLD)
             setTextColor(Color.WHITE)
+            layoutParams = LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f)
         })
 
         rootContainer.addView(btn)
@@ -819,7 +969,7 @@ class MainActivity : AppCompatActivity() {
     private fun addSecondaryButton(iconRes: Int, label: String, onClick: () -> Unit) {
         val btn = LinearLayout(this).apply {
             orientation = LinearLayout.HORIZONTAL
-            gravity = Gravity.CENTER
+            gravity = Gravity.CENTER_VERTICAL
             setPadding(16.dp(), 14.dp(), 16.dp(), 14.dp())
             background = GradientDrawable().apply {
                 setColor(Color.parseColor("#1A1D24"))
@@ -836,7 +986,7 @@ class MainActivity : AppCompatActivity() {
         btn.addView(ImageView(this).apply {
             setImageResource(iconRes)
             imageTintList = ColorStateList.valueOf(Color.parseColor("#60A5FA"))
-            layoutParams = LinearLayout.LayoutParams(20.dp(), 20.dp()).apply { rightMargin = 10.dp() }
+            layoutParams = LinearLayout.LayoutParams(20.dp(), 20.dp()).apply { rightMargin = 12.dp() }
         })
 
         btn.addView(TextView(this).apply {
@@ -844,6 +994,7 @@ class MainActivity : AppCompatActivity() {
             textSize = 15f
             setTypeface(null, Typeface.BOLD)
             setTextColor(Color.parseColor("#E2E8F0"))
+            layoutParams = LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f)
         })
 
         rootContainer.addView(btn)
