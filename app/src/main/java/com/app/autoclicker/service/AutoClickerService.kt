@@ -8,9 +8,11 @@ import android.content.Context
 import android.content.Intent
 import android.content.IntentFilter
 import android.content.res.ColorStateList
+import android.content.res.Configuration
 import android.graphics.Color
 import android.graphics.Path
 import android.graphics.PixelFormat
+import android.graphics.Point
 import android.graphics.Typeface
 import android.graphics.drawable.GradientDrawable
 import android.os.Build
@@ -19,6 +21,7 @@ import android.os.Looper
 import android.view.Gravity
 import android.view.MotionEvent
 import android.view.View
+import android.view.WindowInsets
 import android.view.WindowManager
 import android.view.accessibility.AccessibilityEvent
 import android.widget.ImageView
@@ -34,14 +37,10 @@ import com.app.autoclicker.ui.SettingsActivity
 import kotlinx.coroutines.*
 import java.util.Calendar
 import kotlin.coroutines.resume
-import kotlin.math.PI
 import kotlin.math.abs
 import kotlin.math.cos
-import kotlin.math.hypot
-import kotlin.math.ln
-import kotlin.math.roundToLong
+import kotlin.math.roundToInt
 import kotlin.math.sin
-import kotlin.math.sqrt
 import kotlin.random.Random
 
 class AutoClickerService : AccessibilityService() {
@@ -57,8 +56,6 @@ class AutoClickerService : AccessibilityService() {
     private lateinit var btnPlay: ImageView
     private lateinit var btnCollapse: ImageView
 
-    private val targetViews = mutableListOf<View>()
-
     private data class TargetBubbleRecord(
         val view: View,
         val params: WindowManager.LayoutParams,
@@ -66,12 +63,18 @@ class AutoClickerService : AccessibilityService() {
         val isEndNode: Boolean
     )
 
+    private val targetViews = mutableListOf<View>()
     private val targetBubbleRecords = mutableListOf<TargetBubbleRecord>()
+    private var probeView: View? = null
+
+    @Volatile
+    private var originPhysicalX = 0f
+
+    @Volatile
+    private var originPhysicalY = 0f
+
     private val serviceScope = CoroutineScope(Dispatchers.Default + SupervisorJob())
     private var clickJob: Job? = null
-
-    private var overlayOffsetX = 0f
-    private var overlayOffsetY = 0f
 
     @Volatile
     private var isRunning = false
@@ -81,10 +84,14 @@ class AutoClickerService : AccessibilityService() {
 
     private var isCollapsed = false
     private var activeAppPackage: String? = null
-    private var rhythmStepCounter = 0
 
     private fun Int.dp(): Int = (this * resources.displayMetrics.density).toInt()
     private fun Float.dpF(): Float = this * resources.displayMetrics.density
+
+    private fun getBubbleSizePx(): Int {
+        val raw = 36.dp().coerceAtLeast(72)
+        return (raw / 2) * 2
+    }
 
     private val screenOffReceiver = object : BroadcastReceiver() {
         override fun onReceive(context: Context?, intent: Intent?) {
@@ -99,6 +106,11 @@ class AutoClickerService : AccessibilityService() {
         windowManager = getSystemService(WINDOW_SERVICE) as WindowManager
         instance = this
         registerReceiver(screenOffReceiver, IntentFilter(Intent.ACTION_SCREEN_OFF))
+    }
+
+    override fun onConfigurationChanged(newConfig: Configuration) {
+        super.onConfigurationChanged(newConfig)
+        probeView?.post { updateOriginFromProbe(probeView) }
     }
 
     override fun onUnbind(intent: Intent?): Boolean {
@@ -189,7 +201,7 @@ class AutoClickerService : AccessibilityService() {
             }
         }
 
-        // 4. Open Settings
+        // 4. Open Settings (⚙)
         val btnSettings = createBarVectorButton(R.drawable.ic_settings, Color.WHITE).apply {
             setOnClickListener {
                 if (isRunning) stopClicking()
@@ -208,7 +220,7 @@ class AutoClickerService : AccessibilityService() {
             }
         }
 
-        // 5. Close Floating Overlay
+        // 5. Close Floating Overlay (✕)
         val btnClose = createBarVectorButton(R.drawable.ic_close, Color.parseColor("#F87171")).apply {
             setOnClickListener {
                 stopClicking()
@@ -254,6 +266,7 @@ class AutoClickerService : AccessibilityService() {
             }
         }
 
+        // Order: Top Drag/Shrink/Expand (< / >), Play, Add, Remove, Settings, Close
         listOf(btnCollapse, btnPlay, btnAdd, btnRemove, btnSettings, btnClose).forEach { bar.addView(it) }
 
         controlBarParams = WindowManager.LayoutParams(
@@ -268,6 +281,7 @@ class AutoClickerService : AccessibilityService() {
             y = 280
         }
 
+        attachScreenOriginProbe()
         windowManager.addView(bar, controlBarParams)
         controlBarView = bar
         rebuildAllTargetBubbles()
@@ -275,6 +289,10 @@ class AutoClickerService : AccessibilityService() {
 
     fun hideOverlay() {
         removeAllTargetViewsOnly()
+        probeView?.let {
+            try { windowManager.removeView(it) } catch (_: Exception) {}
+        }
+        probeView = null
         controlBarView?.let {
             try { windowManager.removeView(it) } catch (_: Exception) {}
         }
@@ -282,11 +300,132 @@ class AutoClickerService : AccessibilityService() {
         isCollapsed = false
     }
 
+    private fun createOverlayWindowParams(widthPx: Int, heightPx: Int, touchable: Boolean): WindowManager.LayoutParams {
+        var flags = WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE or
+            WindowManager.LayoutParams.FLAG_LAYOUT_IN_SCREEN or
+            WindowManager.LayoutParams.FLAG_LAYOUT_NO_LIMITS
+        if (!touchable) {
+            flags = flags or WindowManager.LayoutParams.FLAG_NOT_TOUCHABLE
+        }
+        return WindowManager.LayoutParams(
+            widthPx,
+            heightPx,
+            WindowManager.LayoutParams.TYPE_APPLICATION_OVERLAY,
+            flags,
+            PixelFormat.TRANSLUCENT
+        ).apply {
+            gravity = Gravity.TOP or Gravity.START
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.P) {
+                layoutInDisplayCutoutMode =
+                    WindowManager.LayoutParams.LAYOUT_IN_DISPLAY_CUTOUT_MODE_SHORT_EDGES
+            }
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
+                fitInsetsTypes = 0
+                fitInsetsSides = 0
+            }
+        }
+    }
+
+    private fun attachScreenOriginProbe() {
+        if (probeView != null) return
+        val probe = View(this).apply {
+            setBackgroundColor(Color.TRANSPARENT)
+        }
+        val params = createOverlayWindowParams(1, 1, touchable = false).apply {
+            x = 0
+            y = 0
+        }
+        probe.setOnApplyWindowInsetsListener { v, insets ->
+            updateOriginFromProbe(v)
+            insets
+        }
+        windowManager.addView(probe, params)
+        probeView = probe
+        probe.post { updateOriginFromProbe(probe) }
+    }
+
+    private fun updateOriginFromProbe(v: View?) {
+        if (v == null || !v.isAttachedToWindow) return
+
+        var displayLeftInset = 0
+        var displayTopInset = 0
+
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
+            val metrics = windowManager.maximumWindowMetrics
+            val insets = metrics.windowInsets.getInsetsIgnoringVisibility(
+                WindowInsets.Type.statusBars() or WindowInsets.Type.displayCutout()
+            )
+            displayLeftInset = insets.left
+            displayTopInset = insets.top
+        } else {
+            val resId = resources.getIdentifier("status_bar_height", "dimen", "android")
+            val statusBarH = if (resId > 0) resources.getDimensionPixelSize(resId) else 0
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.P) {
+                val cutout = v.rootWindowInsets?.displayCutout
+                displayLeftInset = cutout?.safeInsetLeft ?: 0
+                displayTopInset = maxOf(statusBarH, cutout?.safeInsetTop ?: 0)
+            } else {
+                displayTopInset = statusBarH
+            }
+        }
+
+        val loc = IntArray(2)
+        v.getLocationOnScreen(loc)
+
+        var windowLeftInset = 0
+        var windowTopInset = 0
+        val rootInsets = v.rootWindowInsets
+        if (rootInsets != null) {
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
+                val winInsets = rootInsets.getInsetsIgnoringVisibility(
+                    WindowInsets.Type.statusBars() or WindowInsets.Type.displayCutout()
+                )
+                windowLeftInset = winInsets.left
+                windowTopInset = winInsets.top
+            } else {
+                @Suppress("DEPRECATION")
+                windowLeftInset = rootInsets.systemWindowInsetLeft
+                @Suppress("DEPRECATION")
+                windowTopInset = rootInsets.systemWindowInsetTop
+            }
+        }
+
+        val newOriginX = if (loc[0] > 0) {
+            loc[0].toFloat()
+        } else {
+            (displayLeftInset - windowLeftInset).coerceAtLeast(0).toFloat()
+        }
+        val newOriginY = if (loc[1] > 0) {
+            loc[1].toFloat()
+        } else {
+            (displayTopInset - windowTopInset).coerceAtLeast(0).toFloat()
+        }
+
+        if (newOriginX != originPhysicalX || newOriginY != originPhysicalY) {
+            originPhysicalX = newOriginX
+            originPhysicalY = newOriginY
+            repositionAllTargetBubbles()
+        }
+    }
+
+    private fun getRealScreenSize(): Pair<Int, Int> {
+        return if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
+            val bounds = windowManager.maximumWindowMetrics.bounds
+            bounds.width().coerceAtLeast(1) to bounds.height().coerceAtLeast(1)
+        } else {
+            val pt = Point()
+            @Suppress("DEPRECATION")
+            windowManager.defaultDisplay.getRealSize(pt)
+            pt.x.coerceAtLeast(1) to pt.y.coerceAtLeast(1)
+        }
+    }
+
     private fun toggleCollapse(views: List<View>) {
         isCollapsed = !isCollapsed
         val vis = if (isCollapsed) View.GONE else View.VISIBLE
         views.forEach { it.visibility = vis }
         targetViews.forEach { it.visibility = vis }
+        // '>' = Expand (when collapsed), '<' = Shrink/Close (when expanded)
         btnCollapse.setImageResource(
             if (isCollapsed) R.drawable.ic_chevron_right else R.drawable.ic_chevron_left
         )
@@ -305,13 +444,16 @@ class AutoClickerService : AccessibilityService() {
     private fun addTarget(isSwipe: Boolean) {
         val cfg = ConfigStore.activeConfig
         val id = cfg.targets.size + 1
+        val (screenW, screenH) = getRealScreenSize()
+        val initX = ((screenW * 0.40f) + (id * 30f)).coerceIn(60f, (screenW - 60).coerceAtLeast(61).toFloat())
+        val initY = ((screenH * 0.35f) + (id * 30f)).coerceIn(120f, (screenH - 120).coerceAtLeast(121).toFloat())
         val point = TargetPoint(
             id = id,
-            x = 400f + (id * 30),
-            y = 700f + (id * 30),
+            x = initX,
+            y = initY,
             isSwipe = isSwipe,
-            endX = 400f + (id * 30),
-            endY = 450f + (id * 30)
+            endX = initX,
+            endY = (initY - 220f).coerceAtLeast(120f)
         )
         cfg.targets.add(point)
         spawnTargetBubble(point, isEndNode = false)
@@ -328,112 +470,20 @@ class AutoClickerService : AccessibilityService() {
         }
     }
 
-    private fun spawnTargetBubble(point: TargetPoint, isEndNode: Boolean) {
-        val displayLabel = if (!point.isSwipe) "${point.id}" else if (isEndNode) "${point.id}E" else "${point.id}S"
-        val bgColor = when {
-            !point.enabled -> Color.parseColor("#B34B5563")
-            isEndNode -> Color.parseColor("#CCFF5722")
-            else -> Color.parseColor("#CC2979FF")
-        }
-
-        val bubble = TextView(this).apply {
-            text = displayLabel
-            textSize = 14f
-            setTypeface(null, Typeface.BOLD)
-            setTextColor(if (point.enabled) Color.WHITE else Color.parseColor("#D1D5DB"))
-            gravity = Gravity.CENTER
-            background = GradientDrawable().apply {
-                shape = GradientDrawable.OVAL
-                setColor(bgColor)
-                setStroke(3, if (point.enabled) Color.WHITE else Color.parseColor("#9CA3AF"))
-            }
-            width = 96
-            height = 96
-        }
-
-        val params = WindowManager.LayoutParams(
-            96, 96,
-            WindowManager.LayoutParams.TYPE_APPLICATION_OVERLAY,
-            WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE or
-                WindowManager.LayoutParams.FLAG_LAYOUT_IN_SCREEN or
-                WindowManager.LayoutParams.FLAG_LAYOUT_NO_LIMITS,
-            PixelFormat.TRANSLUCENT
-        ).apply {
-            gravity = Gravity.TOP or Gravity.START
-            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.P) {
-                layoutInDisplayCutoutMode =
-                    WindowManager.LayoutParams.LAYOUT_IN_DISPLAY_CUTOUT_MODE_SHORT_EDGES
-            }
-            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
-                fitInsetsTypes = 0
-            }
-            val targetX = if (isEndNode) point.endX else point.x
-            val targetY = if (isEndNode) point.endY else point.y
-            x = (targetX - 48f - overlayOffsetX).toInt()
-            y = (targetY - 48f - overlayOffsetY).toInt()
-        }
-
-        val record = TargetBubbleRecord(bubble, params, point, isEndNode)
-
-        var initX = 0; var initY = 0; var touchX = 0f; var touchY = 0f
-        var moved = false
-
-        bubble.setOnTouchListener { v, e ->
-            val w = if (v.width > 0) v.width else 96
-            val h = if (v.height > 0) v.height else 96
-
-            when (e.action) {
-                MotionEvent.ACTION_DOWN -> {
-                    initX = params.x; initY = params.y
-                    touchX = e.rawX; touchY = e.rawY
-                    moved = false
-                    overlayOffsetX = (e.rawX - e.x) - params.x
-                    overlayOffsetY = (e.rawY - e.y) - params.y
-                    true
-                }
-                MotionEvent.ACTION_MOVE -> {
-                    val dx = (e.rawX - touchX).toInt()
-                    val dy = (e.rawY - touchY).toInt()
-                    if (abs(dx) > 8 || abs(dy) > 8) {
-                        moved = true
-                        params.x = initX + dx
-                        params.y = initY + dy
-                        windowManager.updateViewLayout(bubble, params)
-                        val screenCenterX = params.x + overlayOffsetX + (w / 2f)
-                        val screenCenterY = params.y + overlayOffsetY + (h / 2f)
-                        if (isEndNode) {
-                            point.endX = screenCenterX
-                            point.endY = screenCenterY
-                        } else {
-                            point.x = screenCenterX
-                            point.y = screenCenterY
-                        }
-                    }
-                    true
-                }
-                MotionEvent.ACTION_UP -> {
-                    if (moved) {
-                        val screenCenterX = e.rawX - e.x + (w / 2f)
-                        val screenCenterY = e.rawY - e.y + (h / 2f)
-                        if (isEndNode) {
-                            point.endX = screenCenterX
-                            point.endY = screenCenterY
-                        } else {
-                            point.x = screenCenterX
-                            point.y = screenCenterY
-                        }
-                    } else if (!isRunning && ConfigStore.activeConfig.targetProgrammability) {
-                        openEditTargetDialog(point)
-                    }
-                    true
-                }
-                else -> false
+    private fun repositionAllTargetBubbles() {
+        val bubbleSize = getBubbleSizePx()
+        val halfSize = bubbleSize / 2f
+        targetBubbleRecords.forEach { rec ->
+            val targetX = if (rec.isEndNode) rec.point.endX else rec.point.x
+            val targetY = if (rec.isEndNode) rec.point.endY else rec.point.y
+            rec.params.x = (targetX - halfSize - originPhysicalX).roundToInt()
+            rec.params.y = (targetY - halfSize - originPhysicalY).roundToInt()
+            if (rec.view.isAttachedToWindow) {
+                try {
+                    windowManager.updateViewLayout(rec.view, rec.params)
+                } catch (_: Exception) {}
             }
         }
-
-        windowManager.addView(bubble, params)
-        targetViews.add(bubble)
-        targetBubbleRecords.add(record)
     }
 
     private fun setTargetBubblesTouchable(touchable: Boolean) {
@@ -452,6 +502,101 @@ class AutoClickerService : AccessibilityService() {
                 }
             }
         }
+    }
+
+    private fun spawnTargetBubble(point: TargetPoint, isEndNode: Boolean) {
+        val displayLabel = if (!point.isSwipe) "${point.id}" else if (isEndNode) "${point.id}E" else "${point.id}S"
+        val bgColor = when {
+            !point.enabled -> Color.parseColor("#B34B5563")
+            isEndNode -> Color.parseColor("#CCFF5722")
+            else -> Color.parseColor("#CC2979FF")
+        }
+
+        val bubbleSize = getBubbleSizePx()
+        val halfSize = bubbleSize / 2f
+
+        val bubble = TextView(this).apply {
+            text = displayLabel
+            textSize = 14f
+            setTypeface(null, Typeface.BOLD)
+            setTextColor(if (point.enabled) Color.WHITE else Color.parseColor("#D1D5DB"))
+            gravity = Gravity.CENTER
+            background = GradientDrawable().apply {
+                shape = GradientDrawable.OVAL
+                setColor(bgColor)
+                setStroke(3, if (point.enabled) Color.WHITE else Color.parseColor("#9CA3AF"))
+            }
+            width = bubbleSize
+            height = bubbleSize
+        }
+
+        val params = createOverlayWindowParams(bubbleSize, bubbleSize, touchable = !isRunning).apply {
+            val targetX = if (isEndNode) point.endX else point.x
+            val targetY = if (isEndNode) point.endY else point.y
+            x = (targetX - halfSize - originPhysicalX).roundToInt()
+            y = (targetY - halfSize - originPhysicalY).roundToInt()
+        }
+
+        val record = TargetBubbleRecord(bubble, params, point, isEndNode)
+
+        var initX = 0; var initY = 0; var touchX = 0f; var touchY = 0f
+        var moved = false
+
+        fun updatePointFromCurrentParams() {
+            val (screenW, screenH) = getRealScreenSize()
+            val physX = (params.x + halfSize + originPhysicalX)
+                .coerceIn(1f, (screenW - 1).coerceAtLeast(1).toFloat())
+            val physY = (params.y + halfSize + originPhysicalY)
+                .coerceIn(1f, (screenH - 1).coerceAtLeast(1).toFloat())
+            if (isEndNode) {
+                point.endX = physX
+                point.endY = physY
+            } else {
+                point.x = physX
+                point.y = physY
+            }
+        }
+
+        bubble.setOnTouchListener { _, e ->
+            when (e.action) {
+                MotionEvent.ACTION_DOWN -> {
+                    initX = params.x; initY = params.y
+                    touchX = e.rawX; touchY = e.rawY
+                    moved = false
+                    true
+                }
+                MotionEvent.ACTION_MOVE -> {
+                    val dx = (e.rawX - touchX).roundToInt()
+                    val dy = (e.rawY - touchY).roundToInt()
+                    if (abs(dx) > 6 || abs(dy) > 6) {
+                        moved = true
+                        params.x = initX + dx
+                        params.y = initY + dy
+                        windowManager.updateViewLayout(bubble, params)
+                        updatePointFromCurrentParams()
+                    }
+                    true
+                }
+                MotionEvent.ACTION_UP -> {
+                    if (moved) {
+                        val dx = (e.rawX - touchX).roundToInt()
+                        val dy = (e.rawY - touchY).roundToInt()
+                        params.x = initX + dx
+                        params.y = initY + dy
+                        windowManager.updateViewLayout(bubble, params)
+                        updatePointFromCurrentParams()
+                    } else if (!isRunning && ConfigStore.activeConfig.targetProgrammability) {
+                        openEditTargetDialog(point)
+                    }
+                    true
+                }
+                else -> false
+            }
+        }
+
+        windowManager.addView(bubble, params)
+        targetViews.add(bubble)
+        targetBubbleRecords.add(record)
     }
 
     private fun openEditTargetDialog(point: TargetPoint) {
@@ -769,10 +914,6 @@ class AutoClickerService : AccessibilityService() {
         removeAllTargetViewsOnly()
     }
 
-    // =========================================================================
-    // EXECUTION LOOP: ENHANCED GHOST ANTI-DETECT & SINGLE-BURST MODE
-    // =========================================================================
-
     private fun startClickingFlow() {
         val cfg = ConfigStore.activeConfig
         if (cfg.targets.isEmpty()) {
@@ -780,22 +921,17 @@ class AutoClickerService : AccessibilityService() {
             return
         }
 
-        rhythmStepCounter = 0
         clickJob?.cancel()
         clickJob = serviceScope.launch {
-            val isBurstMode = cfg.singleBurstMode
-            val isGhostMode = cfg.ghostAntiDetect
-
             if (cfg.startMode == StartMode.START_AT_SPECIFIC_TIME) {
                 isWaitingSchedule = true
                 withContext(Dispatchers.Main) {
                     btnPlay.setImageResource(R.drawable.ic_clock)
                     btnPlay.imageTintList = ColorStateList.valueOf(Color.parseColor("#FBBF24"))
-                    val modeTag = if (isBurstMode) " [Single-Burst]" else ""
                     Toast.makeText(
                         this@AutoClickerService,
-                        "Armed for %02d:%02d:%02d%s".format(
-                            cfg.startAtHour, cfg.startAtMinute, cfg.startAtSecond, modeTag
+                        "Scheduled for %02d:%02d:%02d".format(
+                            cfg.startAtHour, cfg.startAtMinute, cfg.startAtSecond
                         ),
                         Toast.LENGTH_SHORT
                     ).show()
@@ -805,14 +941,12 @@ class AutoClickerService : AccessibilityService() {
                     cfg.startAtHour, cfg.startAtMinute, cfg.startAtSecond, cfg.startAtMillis
                 )
 
-                awaitPrecisionEpoch(targetEpoch, highPrecisionLeadMs = if (isBurstMode) 140L else 35L)
-                isWaitingSchedule = false
-
-                // Subtle human trigger launch reaction (4-15 ms) when Ghost Anti-Detect is enabled
-                if (isActive && isGhostMode) {
-                    val launchJitter = gaussianClamped(mean = 9.0, stdDev = 3.0, minVal = 4.0, maxVal = 16.0).roundToLong()
-                    delay(launchJitter)
+                while (isActive && isWaitingSchedule) {
+                    val remaining = targetEpoch - System.currentTimeMillis()
+                    if (remaining <= 0) break
+                    if (remaining > 25) delay(remaining - 20)
                 }
+                isWaitingSchedule = false
             }
 
             if (!isActive) return@launch
@@ -822,11 +956,11 @@ class AutoClickerService : AccessibilityService() {
                 setTargetBubblesTouchable(false)
                 btnPlay.setImageResource(R.drawable.ic_pause)
                 btnPlay.imageTintList = ColorStateList.valueOf(Color.parseColor("#34D399"))
-                if (!cfg.showActiveTargets || isGhostMode || isBurstMode) {
+                if (!cfg.showActiveTargets || cfg.ghostAntiDetect) {
                     targetViews.forEach { it.visibility = View.INVISIBLE }
                 }
-                if (isGhostMode || isBurstMode) {
-                    controlBarView?.alpha = 0.35f
+                if (cfg.ghostAntiDetect) {
+                    controlBarView?.alpha = 0.45f
                 }
             }
 
@@ -847,12 +981,15 @@ class AutoClickerService : AccessibilityService() {
                     if (!isActive || !isRunning) break
                     if (!target.enabled) continue
 
-                    // Per-target Start At schedule
                     if (target.startAtEnabled && !perTargetScheduledDone.contains(target.id)) {
                         val tEpoch = computeTargetEpochMillis(
                             target.startAtHour, target.startAtMinute, target.startAtSecond, 0
                         )
-                        awaitPrecisionEpoch(tEpoch, highPrecisionLeadMs = if (isBurstMode) 140L else 35L)
+                        while (isActive && isRunning) {
+                            val rem = tEpoch - System.currentTimeMillis()
+                            if (rem <= 0) break
+                            if (rem > 25) delay(rem - 20)
+                        }
                         perTargetScheduledDone.add(target.id)
                         if (!isActive || !isRunning) break
                     }
@@ -861,81 +998,45 @@ class AutoClickerService : AccessibilityService() {
                     repeat(executionsInCycle) {
                         if (!isActive || !isRunning || !target.enabled) return@repeat
 
-                        rhythmStepCounter++
+                        val ghostTimingJitter = if (cfg.ghostAntiDetect) Random.nextLong(3, 18) else 0L
+                        val ghostDurationJitter = if (cfg.ghostAntiDetect) Random.nextLong(5, 22) else 0L
 
-                        // 1. Humanized Start Delay (Gaussian bell curve + subtle organic rhythm wave)
                         val baseStart = target.customStartDelayMs ?: cfg.startDelayMs
                         val randStart = target.customStartDelayRandomMs ?: cfg.startDelayRandomMs
-                        val sDelay = computeHumanizedInterval(
-                            baseMs = baseStart,
-                            randomRangeMs = randStart,
-                            ghostMode = isGhostMode,
-                            addBaseMicroJitter = (baseStart > 0L)
-                        )
-                        if (sDelay > 0L) delay(sDelay)
+                        val sDelay = baseStart +
+                                (if (randStart > 0) Random.nextLong(0, randStart + 1) else 0L) +
+                                ghostTimingJitter
+                        if (sDelay > 0) delay(sDelay)
                         if (!isActive || !isRunning) return@repeat
 
-                        // 2. Humanized Touch Hold / Swipe Duration (Gaussian distribution)
                         val baseDur = target.customDurationMs ?: cfg.durationMs
-                        val duration = computeHumanizedDuration(
-                            baseDurationMs = baseDur,
-                            isSwipe = target.isSwipe,
-                            ghostMode = isGhostMode
-                        )
-
-                        // 3. Humanized 2D Gaussian Scatter + Quadratic Bezier Micro-Drift
+                        val duration = (baseDur + ghostDurationJitter).coerceAtLeast(1L)
                         val baseRad = target.customRandomizationRadiusPx ?: cfg.randomizationRadiusPx
-                        val effectiveRadius = if (isGhostMode) maxOf(baseRad, 4) else baseRad
+                        val effectiveRadius = if (cfg.ghostAntiDetect) maxOf(baseRad, 6) else baseRad
 
-                        withTimeoutOrNull(duration + 450L) {
-                            performHumanizedGestureSuspend(target, duration, effectiveRadius, isGhostMode)
+                        withTimeoutOrNull(duration + 400L) {
+                            performTargetGestureSuspend(target, duration, effectiveRadius, cfg.ghostAntiDetect)
                         }
                         if (!isActive || !isRunning) return@repeat
 
-                        // 4. Humanized End Delay between sequential targets
                         val baseEnd = target.customEndDelayMs ?: cfg.endDelayMs
                         val randEnd = target.customEndDelayRandomMs ?: cfg.endDelayRandomMs
-                        val rawEndDelay = computeHumanizedInterval(
-                            baseMs = baseEnd,
-                            randomRangeMs = randEnd,
-                            ghostMode = isGhostMode,
-                            addBaseMicroJitter = true
-                        )
-                        // In Single-Burst + Ghost mode, enforce a safe human minimum cadence
-                        val minCadenceFloor = when {
-                            isBurstMode && isGhostMode -> 48L
-                            isGhostMode -> 24L
-                            else -> 12L
-                        }
-                        delay(rawEndDelay.coerceAtLeast(minCadenceFloor))
+                        val eDelay = baseEnd +
+                                (if (randEnd > 0) Random.nextLong(0, randEnd + 1) else 0L) +
+                                ghostTimingJitter
+                        delay(eDelay.coerceAtLeast(12L))
 
-                        // Per-target auto-disable counter
                         val runsDone = (perTargetRunCounts[target.id] ?: 0) + 1
                         perTargetRunCounts[target.id] = runsDone
                         if (target.disableAfterRuns > 0 && runsDone >= target.disableAfterRuns) {
                             target.enabled = false
-                            withContext(Dispatchers.Main) {
-                                rebuildAllTargetBubbles()
-                                setTargetBubblesTouchable(false)
-                            }
+                            withContext(Dispatchers.Main) { rebuildAllTargetBubbles() }
                         }
                     }
                 }
 
                 if (!isActive || !isRunning) break
                 totalCycles++
-
-                // Single-Burst Mode: stop strictly after 1 complete pass
-                if (isBurstMode) {
-                    withContext(Dispatchers.Main) {
-                        Toast.makeText(
-                            this@AutoClickerService,
-                            "Single-burst completed (1 pass)",
-                            Toast.LENGTH_SHORT
-                        ).show()
-                    }
-                    break
-                }
 
                 val shouldStop = when (cfg.stopMode) {
                     StopMode.INDEFINITE -> false
@@ -964,109 +1065,6 @@ class AutoClickerService : AccessibilityService() {
         targetViews.forEach { it.visibility = if (isCollapsed) View.GONE else View.VISIBLE }
     }
 
-    /**
-     * Hybrid scheduler wait: uses coroutine delay for the coarse interval and a short
-     * Thread.yield() spin window for sub-millisecond trigger accuracy on scheduled drops.
-     */
-    private suspend fun awaitPrecisionEpoch(targetEpoch: Long, highPrecisionLeadMs: Long) {
-        while (currentCoroutineContext().isActive && (isWaitingSchedule || isRunning)) {
-            val remaining = targetEpoch - System.currentTimeMillis()
-            if (remaining <= 0L) break
-            if (remaining > highPrecisionLeadMs) {
-                delay((remaining - (highPrecisionLeadMs - 10L)).coerceAtLeast(1L))
-            } else {
-                while (currentCoroutineContext().isActive &&
-                    (isWaitingSchedule || isRunning) &&
-                    System.currentTimeMillis() < targetEpoch
-                ) {
-                    Thread.yield()
-                }
-                break
-            }
-        }
-    }
-
-    // =========================================================================
-    // BIOMECHANICAL GAUSSIAN & BEZIER HUMANIZATION ENGINE
-    // =========================================================================
-
-    /**
-     * Standard normal variate N(0, 1) via Box-Muller transform.
-     */
-    private fun nextGaussian(): Double {
-        var u1 = Random.nextDouble()
-        while (u1 <= 1e-7) {
-            u1 = Random.nextDouble()
-        }
-        val u2 = Random.nextDouble()
-        return sqrt(-2.0 * ln(u1)) * cos(2.0 * PI * u2)
-    }
-
-    private fun gaussianClamped(mean: Double, stdDev: Double, minVal: Double, maxVal: Double): Double {
-        if (stdDev <= 0.0) return mean.coerceIn(minVal, maxVal)
-        val raw = mean + nextGaussian() * stdDev
-        return raw.coerceIn(minVal, maxVal)
-    }
-
-    /**
-     * Computes a human-like delay interval using Gaussian bell-curve distribution
-     * plus subtle sinusoidal rhythm drift so intervals never form a flat uniform signature.
-     */
-    private fun computeHumanizedInterval(
-        baseMs: Long,
-        randomRangeMs: Long,
-        ghostMode: Boolean,
-        addBaseMicroJitter: Boolean
-    ): Long {
-        if (!ghostMode) {
-            val uniformRand = if (randomRangeMs > 0L) Random.nextLong(0L, randomRangeMs + 1L) else 0L
-            return (baseMs + uniformRand).coerceAtLeast(0L)
-        }
-
-        val rangedOffset = if (randomRangeMs > 0L) {
-            gaussianClamped(
-                mean = randomRangeMs * 0.48,
-                stdDev = randomRangeMs * 0.24,
-                minVal = 0.0,
-                maxVal = randomRangeMs.toDouble()
-            ).roundToLong()
-        } else {
-            0L
-        }
-
-        val microJitter = if (addBaseMicroJitter) {
-            val waveDrift = sin(rhythmStepCounter * 0.65) * 3.5
-            gaussianClamped(
-                mean = 11.0 + waveDrift,
-                stdDev = 5.5,
-                minVal = 2.0,
-                maxVal = 28.0
-            ).roundToLong()
-        } else {
-            0L
-        }
-
-        return (baseMs + rangedOffset + microJitter).coerceAtLeast(0L)
-    }
-
-    /**
-     * Models natural human finger dwell time (contact duration) with a Gaussian curve.
-     */
-    private fun computeHumanizedDuration(
-        baseDurationMs: Long,
-        isSwipe: Boolean,
-        ghostMode: Boolean
-    ): Long {
-        if (!ghostMode) return baseDurationMs.coerceAtLeast(1L)
-
-        val jitter = if (isSwipe) {
-            gaussianClamped(mean = 18.0, stdDev = 9.0, minVal = 4.0, maxVal = 45.0).roundToLong()
-        } else {
-            gaussianClamped(mean = 14.0, stdDev = 6.5, minVal = 4.0, maxVal = 34.0).roundToLong()
-        }
-        return (baseDurationMs + jitter).coerceAtLeast(12L)
-    }
-
     private fun computeTargetEpochMillis(hour: Int, minute: Int, second: Int, millis: Int): Long {
         val now = System.currentTimeMillis()
         val cal = Calendar.getInstance().apply {
@@ -1081,52 +1079,33 @@ class AutoClickerService : AccessibilityService() {
         return cal.timeInMillis
     }
 
-    private suspend fun performHumanizedGestureSuspend(
+    private suspend fun performTargetGestureSuspend(
         target: TargetPoint,
         durationMs: Long,
         radiusPx: Int,
         ghostMode: Boolean
     ) = suspendCancellableCoroutine { cont ->
-        val (rawSx, rawSy) = applyHumanizedOffset(target.x, target.y, radiusPx, ghostMode)
-        val sx = rawSx.coerceAtLeast(1f)
-        val sy = rawSy.coerceAtLeast(1f)
-        val path = Path().apply {
-            moveTo(sx, sy)
-            if (target.isSwipe) {
-                val (rawEx, rawEy) = applyHumanizedOffset(target.endX, target.endY, radiusPx, ghostMode)
-                val ex = rawEx.coerceAtLeast(1f)
-                val ey = rawEy.coerceAtLeast(1f)
-                if (ghostMode) {
-                    // Curved Quadratic Bezier swipe trajectory mimicking thumb/finger arc
-                    val dx = ex - sx
-                    val dy = ey - sy
-                    val dist = hypot(dx.toDouble(), dy.toDouble()).toFloat().coerceAtLeast(1f)
-                    val perpX = -dy / dist
-                    val perpY = dx / dist
-                    val maxArc = (dist * 0.08f).coerceIn(6f, 28f)
-                    val arcOffset = gaussianClamped(0.0, maxArc * 0.55, -maxArc.toDouble(), maxArc.toDouble()).toFloat()
-                    val t = gaussianClamped(0.50, 0.08, 0.35, 0.65).toFloat()
-                    val ctrlX = (sx + dx * t + perpX * arcOffset).coerceAtLeast(1f)
-                    val ctrlY = (sy + dy * t + perpY * arcOffset).coerceAtLeast(1f)
-                    quadTo(ctrlX, ctrlY, ex, ey)
-                } else {
-                    lineTo(ex, ey)
-                }
-            } else if (ghostMode) {
-                // Curved Bezier micro-drift (1.2 - 4.2 px) simulating fingertip skin roll on glass
-                val driftAngle = Random.nextDouble(0.0, 2.0 * PI)
-                val driftDist = gaussianClamped(mean = 2.4, stdDev = 0.75, minVal = 1.1, maxVal = 4.3).toFloat()
-                val ex = (sx + (driftDist * cos(driftAngle)).toFloat()).coerceAtLeast(1f)
-                val ey = (sy + (driftDist * sin(driftAngle)).toFloat()).coerceAtLeast(1f)
+        val (screenW, screenH) = getRealScreenSize()
+        val maxX = (screenW - 1).coerceAtLeast(1).toFloat()
+        val maxY = (screenH - 1).coerceAtLeast(1).toFloat()
 
-                val bowAngle = driftAngle + (if (Random.nextBoolean()) PI / 2.0 else -PI / 2.0)
-                val bowDist = driftDist * 0.45f
-                val ctrlX = ((sx + ex) * 0.5f + (bowDist * cos(bowAngle)).toFloat()).coerceAtLeast(1f)
-                val ctrlY = ((sy + ey) * 0.5f + (bowDist * sin(bowAngle)).toFloat()).coerceAtLeast(1f)
-                quadTo(ctrlX, ctrlY, ex, ey)
+        val (rawRx, rawRy) = applyRandomRadius(target.x, target.y, radiusPx)
+        val rx = rawRx.coerceIn(1f, maxX)
+        val ry = rawRy.coerceIn(1f, maxY)
+
+        val path = Path().apply {
+            moveTo(rx, ry)
+            if (target.isSwipe) {
+                val (rawEx, rawEy) = applyRandomRadius(target.endX, target.endY, radiusPx)
+                val ex = rawEx.coerceIn(1f, maxX)
+                val ey = rawEy.coerceIn(1f, maxY)
+                lineTo(ex, ey)
+            } else if (ghostMode) {
+                val driftX = (rx + Random.nextFloat() * 3f - 1.5f).coerceIn(1f, maxX)
+                val driftY = (ry + Random.nextFloat() * 3f - 1.5f).coerceIn(1f, maxY)
+                lineTo(driftX, driftY)
             }
         }
-
         val stroke = GestureDescription.StrokeDescription(path, 0L, durationMs)
         val gesture = GestureDescription.Builder().addStroke(stroke).build()
 
@@ -1147,33 +1126,10 @@ class AutoClickerService : AccessibilityService() {
         }
     }
 
-    /**
-     * Generates a touch coordinate offset around (x, y).
-     * In Ghost mode, uses a 2D Gaussian distribution so touches cluster naturally near
-     * the button center with rare organic outliers inside [radius].
-     */
-    private fun applyHumanizedOffset(
-        x: Float,
-        y: Float,
-        radius: Int,
-        ghostMode: Boolean
-    ): Pair<Float, Float> {
+    private fun applyRandomRadius(x: Float, y: Float, radius: Int): Pair<Float, Float> {
         if (radius <= 0) return x to y
-        return if (ghostMode) {
-            val sigma = radius / 2.2
-            val ox = gaussianClamped(0.0, sigma, -radius.toDouble(), radius.toDouble()).toFloat()
-            val oy = gaussianClamped(0.0, sigma, -radius.toDouble(), radius.toDouble()).toFloat()
-            val dist = hypot(ox.toDouble(), oy.toDouble()).toFloat()
-            if (dist > radius) {
-                val scale = radius / dist
-                (x + ox * scale) to (y + oy * scale)
-            } else {
-                (x + ox) to (y + oy)
-            }
-        } else {
-            val angle = Random.nextDouble(0.0, 2.0 * PI)
-            val r = Random.nextDouble(0.0, radius.toDouble())
-            (x + (r * cos(angle)).toFloat()) to (y + (r * sin(angle)).toFloat())
-        }
+        val angle = Random.nextDouble(0.0, 2 * Math.PI)
+        val r = Random.nextDouble(0.0, radius.toDouble())
+        return (x + (r * cos(angle)).toFloat()) to (y + (r * sin(angle)).toFloat())
     }
 }
