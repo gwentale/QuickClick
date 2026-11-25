@@ -4,14 +4,22 @@ import android.Manifest
 import android.content.Intent
 import android.content.pm.PackageManager
 import android.content.res.ColorStateList
+import android.graphics.Canvas
 import android.graphics.Color
+import android.graphics.ColorFilter
+import android.graphics.Paint
+import android.graphics.Path
+import android.graphics.PixelFormat
 import android.graphics.Typeface
+import android.graphics.drawable.Drawable
 import android.graphics.drawable.GradientDrawable
 import android.net.Uri
 import android.os.Build
 import android.os.Bundle
 import android.os.PowerManager
 import android.provider.Settings
+import android.transition.AutoTransition
+import android.transition.TransitionManager
 import android.view.Gravity
 import android.view.View
 import android.widget.ImageView
@@ -28,6 +36,10 @@ import com.app.autoclicker.service.AutoClickerService
 class MainActivity : AppCompatActivity() {
 
     private lateinit var rootContainer: LinearLayout
+
+    private var isOverlayDescExpanded = false
+    private var isAccessibilityDescExpanded = false
+    private var isBatteryDescExpanded = false
 
     private fun Int.dp(): Int = (this * resources.displayMetrics.density).toInt()
     private fun Float.dpF(): Float = this * resources.displayMetrics.density
@@ -62,7 +74,11 @@ class MainActivity : AppCompatActivity() {
             if (ContextCompat.checkSelfPermission(this, Manifest.permission.POST_NOTIFICATIONS)
                 != PackageManager.PERMISSION_GRANTED
             ) {
-                ActivityCompat.requestPermissions(this, arrayOf(Manifest.permission.POST_NOTIFICATIONS), 101)
+                ActivityCompat.requestPermissions(
+                    this,
+                    arrayOf(Manifest.permission.POST_NOTIFICATIONS),
+                    101
+                )
             }
         }
     }
@@ -132,7 +148,12 @@ class MainActivity : AppCompatActivity() {
             isActive = overlayGranted
         ) {
             if (!overlayGranted) {
-                startActivity(Intent(Settings.ACTION_MANAGE_OVERLAY_PERMISSION, Uri.parse("package:$packageName")))
+                startActivity(
+                    Intent(
+                        Settings.ACTION_MANAGE_OVERLAY_PERMISSION,
+                        Uri.parse("package:$packageName")
+                    )
+                )
             } else {
                 Toast.makeText(this, "Overlay permission is already active", Toast.LENGTH_SHORT).show()
             }
@@ -205,9 +226,8 @@ class MainActivity : AppCompatActivity() {
             startActivity(Intent(this, InstructionsActivity::class.java))
         }
 
-        // Permission Explanations Section Below Controls
-        addSectionLabel("PERMISSION DETAILS")
-        addPermissionExplanationCard()
+        // Expandable & Collapsible Permission Details Section
+        addPermissionDetailsSection()
 
         // Bottom-Right App Version Footer
         val tvVersion = TextView(this).apply {
@@ -225,10 +245,37 @@ class MainActivity : AppCompatActivity() {
         rootContainer.addView(tvVersion)
     }
 
-    private fun addPermissionExplanationCard() {
+    private fun addPermissionDetailsSection() {
+        val headerRow = LinearLayout(this).apply {
+            orientation = LinearLayout.HORIZONTAL
+            gravity = Gravity.CENTER_VERTICAL
+            setPadding(2.dp(), 12.dp(), 2.dp(), 6.dp())
+        }
+
+        val tvSectionTitle = TextView(this).apply {
+            text = "PERMISSION DETAILS"
+            textSize = 11f
+            letterSpacing = 0.1f
+            setTypeface(null, Typeface.BOLD)
+            setTextColor(Color.parseColor("#8A8F9E"))
+            layoutParams = LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f)
+        }
+
+        val tvToggleAll = TextView(this).apply {
+            text = if (isAllDetailsExpanded()) "Collapse All" else "Expand All"
+            textSize = 11.5f
+            setTypeface(null, Typeface.BOLD)
+            setTextColor(Color.parseColor("#60A5FA"))
+            setPadding(8.dp(), 2.dp(), 2.dp(), 2.dp())
+        }
+
+        headerRow.addView(tvSectionTitle)
+        headerRow.addView(tvToggleAll)
+        rootContainer.addView(headerRow)
+
         val card = LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
-            setPadding(16.dp(), 14.dp(), 16.dp(), 14.dp())
+            setPadding(16.dp(), 10.dp(), 16.dp(), 10.dp())
             background = GradientDrawable().apply {
                 setColor(Color.parseColor("#1A1D24"))
                 cornerRadius = 12f.dpF()
@@ -240,70 +287,181 @@ class MainActivity : AppCompatActivity() {
             ).apply { bottomMargin = 4.dp() }
         }
 
-        card.addView(
-            createPermissionExplanationItem(
-                iconRes = R.drawable.ic_layers,
-                title = "Overlay Permission",
-                description = "Allows QuickClick to display the floating control bar and touch target indicators over other apps so you can position and control auto-clicks anywhere on screen."
-            )
-        )
+        fun updateToggleAllText() {
+            tvToggleAll.text = if (isAllDetailsExpanded()) "Collapse All" else "Expand All"
+        }
 
+        val overlayItem = createExpandablePermissionItem(
+            parentCard = card,
+            iconRes = R.drawable.ic_layers,
+            title = "Overlay Permission",
+            description = "Allows QuickClick to display the floating control bar and touch target indicators over other apps so you can position and control auto-clicks anywhere on screen.",
+            initialExpanded = isOverlayDescExpanded
+        ) { expanded ->
+            isOverlayDescExpanded = expanded
+            updateToggleAllText()
+        }
+
+        val accessibilityItem = createExpandablePermissionItem(
+            parentCard = card,
+            iconRes = R.drawable.ic_shield,
+            title = "Accessibility Service",
+            description = "Starting the QuickClick accessibility service allows this application to send clicks/taps and swipes on your behalf. You can disable it at any time, but it will need to be enabled for QuickClick to run.",
+            initialExpanded = isAccessibilityDescExpanded
+        ) { expanded ->
+            isAccessibilityDescExpanded = expanded
+            updateToggleAllText()
+        }
+
+        val batteryItem = createExpandablePermissionItem(
+            parentCard = card,
+            iconRes = R.drawable.ic_battery,
+            title = "Keep Alive (Battery)",
+            description = "Disabling battery optimization prevents Android from putting QuickClick to sleep or stopping background execution during long scheduled timers and continuous click cycles.",
+            initialExpanded = isBatteryDescExpanded
+        ) { expanded ->
+            isBatteryDescExpanded = expanded
+            updateToggleAllText()
+        }
+
+        card.addView(overlayItem.container)
         card.addView(createDivider())
-
-        card.addView(
-            createPermissionExplanationItem(
-                iconRes = R.drawable.ic_shield,
-                title = "Accessibility Service",
-                description = "Starting the QuickClick accessibility service allows this application to send clicks/taps and swipes on your behalf. You can disable it at any time, but it will need to be enabled for QuickClick to run."
-            )
-        )
-
+        card.addView(accessibilityItem.container)
         card.addView(createDivider())
+        card.addView(batteryItem.container)
 
-        card.addView(
-            createPermissionExplanationItem(
-                iconRes = R.drawable.ic_battery,
-                title = "Keep Alive (Battery)",
-                description = "Disabling battery optimization prevents Android from putting QuickClick to sleep or stopping background execution during long scheduled timers and continuous click cycles."
-            )
-        )
+        headerRow.setOnClickListener {
+            val expandAll = !isAllDetailsExpanded()
+            TransitionManager.beginDelayedTransition(card, AutoTransition().apply { duration = 200 })
+
+            isOverlayDescExpanded = expandAll
+            isAccessibilityDescExpanded = expandAll
+            isBatteryDescExpanded = expandAll
+
+            overlayItem.setExpanded(expandAll)
+            accessibilityItem.setExpanded(expandAll)
+            batteryItem.setExpanded(expandAll)
+            updateToggleAllText()
+        }
 
         rootContainer.addView(card)
     }
 
-    private fun createPermissionExplanationItem(
+    private data class ExpandableItemHolder(
+        val container: LinearLayout,
+        val setExpanded: (Boolean) -> Unit
+    )
+
+    private fun createExpandablePermissionItem(
+        parentCard: LinearLayout,
         iconRes: Int,
         title: String,
-        description: String
-    ): LinearLayout {
-        return LinearLayout(this).apply {
+        description: String,
+        initialExpanded: Boolean,
+        onStateChanged: (Boolean) -> Unit
+    ): ExpandableItemHolder {
+        var expanded = initialExpanded
+
+        val itemContainer = LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
-            setPadding(0, 4.dp(), 0, 4.dp())
+            setPadding(0, 6.dp(), 0, 6.dp())
+        }
 
-            val titleRow = LinearLayout(context).apply {
-                orientation = LinearLayout.HORIZONTAL
-                gravity = Gravity.CENTER_VERTICAL
-                setPadding(0, 0, 0, 4.dp())
+        val titleRow = LinearLayout(this).apply {
+            orientation = LinearLayout.HORIZONTAL
+            gravity = Gravity.CENTER_VERTICAL
+            setPadding(0, 2.dp(), 0, 2.dp())
+        }
+
+        val ivLeftIcon = ImageView(this).apply {
+            setImageResource(iconRes)
+            imageTintList = ColorStateList.valueOf(Color.parseColor("#60A5FA"))
+            layoutParams = LinearLayout.LayoutParams(16.dp(), 16.dp()).apply { rightMargin = 8.dp() }
+        }
+
+        val tvTitle = TextView(this).apply {
+            text = title
+            textSize = 14.5f
+            setTypeface(null, Typeface.BOLD)
+            setTextColor(Color.parseColor("#F1F3F6"))
+            layoutParams = LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f)
+        }
+
+        val ivChevron = ImageView(this).apply {
+            setImageDrawable(createChevronDrawable(Color.parseColor("#8A8F9E")))
+            rotation = if (expanded) 180f else 0f
+            layoutParams = LinearLayout.LayoutParams(18.dp(), 18.dp())
+        }
+
+        val tvDescription = TextView(this).apply {
+            text = description
+            textSize = 12.5f
+            setLineSpacing(3.5f, 1.15f)
+            setTextColor(Color.parseColor("#9CA3AF"))
+            visibility = if (expanded) View.VISIBLE else View.GONE
+            setPadding(24.dp(), 6.dp(), 4.dp(), 2.dp())
+        }
+
+        titleRow.addView(ivLeftIcon)
+        titleRow.addView(tvTitle)
+        titleRow.addView(ivChevron)
+
+        itemContainer.addView(titleRow)
+        itemContainer.addView(tvDescription)
+
+        val applyState: (Boolean) -> Unit = { newState ->
+            expanded = newState
+            tvDescription.visibility = if (expanded) View.VISIBLE else View.GONE
+            ivChevron.animate()
+                .rotation(if (expanded) 180f else 0f)
+                .setDuration(200)
+                .start()
+        }
+
+        itemContainer.setOnClickListener {
+            TransitionManager.beginDelayedTransition(parentCard, AutoTransition().apply { duration = 200 })
+            applyState(!expanded)
+            onStateChanged(expanded)
+        }
+
+        return ExpandableItemHolder(itemContainer, applyState)
+    }
+
+    private fun isAllDetailsExpanded(): Boolean {
+        return isOverlayDescExpanded && isAccessibilityDescExpanded && isBatteryDescExpanded
+    }
+
+    private fun createChevronDrawable(color: Int): Drawable {
+        return object : Drawable() {
+            private val paint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+                this.color = color
+                style = Paint.Style.STROKE
+                strokeWidth = 2f.dpF()
+                strokeCap = Paint.Cap.ROUND
+                strokeJoin = Paint.Join.ROUND
             }
-            titleRow.addView(ImageView(context).apply {
-                setImageResource(iconRes)
-                imageTintList = ColorStateList.valueOf(Color.parseColor("#60A5FA"))
-                layoutParams = LinearLayout.LayoutParams(16.dp(), 16.dp()).apply { rightMargin = 8.dp() }
-            })
-            titleRow.addView(TextView(context).apply {
-                text = title
-                textSize = 14.5f
-                setTypeface(null, Typeface.BOLD)
-                setTextColor(Color.parseColor("#F1F3F6"))
-            })
 
-            addView(titleRow)
-            addView(TextView(context).apply {
-                text = description
-                textSize = 12.5f
-                setLineSpacing(3.5f, 1.15f)
-                setTextColor(Color.parseColor("#9CA3AF"))
-            })
+            override fun draw(canvas: Canvas) {
+                val w = bounds.width().toFloat()
+                val h = bounds.height().toFloat()
+                val path = Path().apply {
+                    moveTo(w * 0.25f, h * 0.38f)
+                    lineTo(w * 0.50f, h * 0.63f)
+                    lineTo(w * 0.75f, h * 0.38f)
+                }
+                canvas.drawPath(path, paint)
+            }
+
+            override fun setAlpha(alpha: Int) {
+                paint.alpha = alpha
+            }
+
+            override fun setColorFilter(colorFilter: ColorFilter?) {
+                paint.colorFilter = colorFilter
+            }
+
+            @Deprecated("Deprecated in Java")
+            override fun getOpacity(): Int = PixelFormat.TRANSLUCENT
         }
     }
 
@@ -314,8 +472,8 @@ class MainActivity : AppCompatActivity() {
                 LinearLayout.LayoutParams.MATCH_PARENT,
                 1.dp()
             ).apply {
-                topMargin = 8.dp()
-                bottomMargin = 8.dp()
+                topMargin = 6.dp()
+                bottomMargin = 6.dp()
             }
         }
     }
@@ -331,7 +489,13 @@ class MainActivity : AppCompatActivity() {
         })
     }
 
-    private fun addStatusCard(iconRes: Int, title: String, statusText: String, isActive: Boolean, onClick: () -> Unit) {
+    private fun addStatusCard(
+        iconRes: Int,
+        title: String,
+        statusText: String,
+        isActive: Boolean,
+        onClick: () -> Unit
+    ) {
         val card = LinearLayout(this).apply {
             orientation = LinearLayout.HORIZONTAL
             gravity = Gravity.CENTER_VERTICAL
