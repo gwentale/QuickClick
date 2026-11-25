@@ -13,6 +13,7 @@ import android.os.Bundle
 import android.os.PowerManager
 import android.provider.Settings
 import android.view.Gravity
+import android.view.View
 import android.widget.ImageView
 import android.widget.LinearLayout
 import android.widget.ScrollView
@@ -37,11 +38,12 @@ class MainActivity : AppCompatActivity() {
 
         val scroll = ScrollView(this).apply {
             setBackgroundColor(Color.parseColor("#0F1115"))
+            isFillViewport = true
         }
 
         rootContainer = LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
-            setPadding(18.dp(), 22.dp(), 18.dp(), 24.dp())
+            setPadding(18.dp(), 22.dp(), 18.dp(), 20.dp())
         }
 
         scroll.addView(rootContainer)
@@ -72,6 +74,20 @@ class MainActivity : AppCompatActivity() {
 
     private fun isAccessibilityEnabled(): Boolean {
         return AutoClickerService.instance != null
+    }
+
+    private fun getAppVersionName(): String {
+        return try {
+            val pInfo = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+                packageManager.getPackageInfo(packageName, PackageManager.PackageInfoFlags.of(0))
+            } else {
+                @Suppress("DEPRECATION")
+                packageManager.getPackageInfo(packageName, 0)
+            }
+            pInfo.versionName ?: "1.0.0"
+        } catch (_: Exception) {
+            "1.0.0"
+        }
     }
 
     private fun renderUI() {
@@ -187,6 +203,120 @@ class MainActivity : AppCompatActivity() {
 
         addSecondaryButton(R.drawable.ic_info, "Instructions") {
             startActivity(Intent(this, InstructionsActivity::class.java))
+        }
+
+        // Permission Explanations Section Below Controls
+        addSectionLabel("PERMISSION DETAILS")
+        addPermissionExplanationCard()
+
+        // Bottom-Right App Version Footer
+        val tvVersion = TextView(this).apply {
+            text = "Version ${getAppVersionName()}"
+            textSize = 11.5f
+            setTypeface(null, Typeface.BOLD)
+            setTextColor(Color.parseColor("#6B7280"))
+            gravity = Gravity.END
+            setPadding(0, 14.dp(), 4.dp(), 4.dp())
+            layoutParams = LinearLayout.LayoutParams(
+                LinearLayout.LayoutParams.MATCH_PARENT,
+                LinearLayout.LayoutParams.WRAP_CONTENT
+            )
+        }
+        rootContainer.addView(tvVersion)
+    }
+
+    private fun addPermissionExplanationCard() {
+        val card = LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
+            setPadding(16.dp(), 14.dp(), 16.dp(), 14.dp())
+            background = GradientDrawable().apply {
+                setColor(Color.parseColor("#1A1D24"))
+                cornerRadius = 12f.dpF()
+                setStroke(1.dp(), Color.parseColor("#282C37"))
+            }
+            layoutParams = LinearLayout.LayoutParams(
+                LinearLayout.LayoutParams.MATCH_PARENT,
+                LinearLayout.LayoutParams.WRAP_CONTENT
+            ).apply { bottomMargin = 4.dp() }
+        }
+
+        card.addView(
+            createPermissionExplanationItem(
+                iconRes = R.drawable.ic_layers,
+                title = "Overlay Permission",
+                description = "Allows QuickClick to display the floating control bar and touch target indicators over other apps so you can position and control auto-clicks anywhere on screen."
+            )
+        )
+
+        card.addView(createDivider())
+
+        card.addView(
+            createPermissionExplanationItem(
+                iconRes = R.drawable.ic_shield,
+                title = "Accessibility Service",
+                description = "Starting the QuickClick accessibility service allows this application to send clicks/taps and swipes on your behalf. You can disable it at any time, but it will need to be enabled for QuickClick to run."
+            )
+        )
+
+        card.addView(createDivider())
+
+        card.addView(
+            createPermissionExplanationItem(
+                iconRes = R.drawable.ic_battery,
+                title = "Keep Alive (Battery)",
+                description = "Disabling battery optimization prevents Android from putting QuickClick to sleep or stopping background execution during long scheduled timers and continuous click cycles."
+            )
+        )
+
+        rootContainer.addView(card)
+    }
+
+    private fun createPermissionExplanationItem(
+        iconRes: Int,
+        title: String,
+        description: String
+    ): LinearLayout {
+        return LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
+            setPadding(0, 4.dp(), 0, 4.dp())
+
+            val titleRow = LinearLayout(context).apply {
+                orientation = LinearLayout.HORIZONTAL
+                gravity = Gravity.CENTER_VERTICAL
+                setPadding(0, 0, 0, 4.dp())
+            }
+            titleRow.addView(ImageView(context).apply {
+                setImageResource(iconRes)
+                imageTintList = ColorStateList.valueOf(Color.parseColor("#60A5FA"))
+                layoutParams = LinearLayout.LayoutParams(16.dp(), 16.dp()).apply { rightMargin = 8.dp() }
+            })
+            titleRow.addView(TextView(context).apply {
+                text = title
+                textSize = 14.5f
+                setTypeface(null, Typeface.BOLD)
+                setTextColor(Color.parseColor("#F1F3F6"))
+            })
+
+            addView(titleRow)
+            addView(TextView(context).apply {
+                text = description
+                textSize = 12.5f
+                setLineSpacing(3.5f, 1.15f)
+                setTextColor(Color.parseColor("#9CA3AF"))
+            })
+        }
+    }
+
+    private fun createDivider(): View {
+        return View(this).apply {
+            setBackgroundColor(Color.parseColor("#282C37"))
+            layoutParams = LinearLayout.LayoutParams(
+                LinearLayout.LayoutParams.MATCH_PARENT,
+                1.dp()
+            ).apply {
+                topMargin = 8.dp()
+                bottomMargin = 8.dp()
+            }
         }
     }
 
