@@ -342,10 +342,16 @@ class AutoClickerService : AccessibilityService() {
         val params = WindowManager.LayoutParams(
             96, 96,
             WindowManager.LayoutParams.TYPE_APPLICATION_OVERLAY,
-            WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE,
+            WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE or
+                WindowManager.LayoutParams.FLAG_LAYOUT_IN_SCREEN or
+                WindowManager.LayoutParams.FLAG_LAYOUT_NO_LIMITS,
             PixelFormat.TRANSLUCENT
         ).apply {
             gravity = Gravity.TOP or Gravity.START
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.P) {
+                layoutInDisplayCutoutMode =
+                    WindowManager.LayoutParams.LAYOUT_IN_DISPLAY_CUTOUT_MODE_SHORT_EDGES
+            }
             x = (if (isEndNode) point.endX else point.x).toInt() - 48
             y = (if (isEndNode) point.endY else point.y).toInt() - 48
         }
@@ -369,12 +375,14 @@ class AutoClickerService : AccessibilityService() {
                         params.x = initX + dx
                         params.y = initY + dy
                         windowManager.updateViewLayout(bubble, params)
+                        val loc = IntArray(2)
+                        bubble.getLocationOnScreen(loc)
                         if (isEndNode) {
-                            point.endX = params.x + 48f
-                            point.endY = params.y + 48f
+                            point.endX = loc[0] + 48f
+                            point.endY = loc[1] + 48f
                         } else {
-                            point.x = params.x + 48f
-                            point.y = params.y + 48f
+                            point.x = loc[0] + 48f
+                            point.y = loc[1] + 48f
                         }
                     }
                     true
@@ -390,6 +398,19 @@ class AutoClickerService : AccessibilityService() {
         }
 
         windowManager.addView(bubble, params)
+        bubble.post {
+            val loc = IntArray(2)
+            bubble.getLocationOnScreen(loc)
+            if (loc[0] != 0 || loc[1] != 0) {
+                if (isEndNode) {
+                    point.endX = loc[0] + 48f
+                    point.endY = loc[1] + 48f
+                } else {
+                    point.x = loc[0] + 48f
+                    point.y = loc[1] + 48f
+                }
+            }
+        }
         targetViews.add(bubble)
     }
 
