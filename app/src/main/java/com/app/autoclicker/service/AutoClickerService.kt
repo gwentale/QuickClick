@@ -16,17 +16,19 @@ import android.graphics.drawable.GradientDrawable
 import android.os.Build
 import android.os.Handler
 import android.os.Looper
-import android.text.InputType
 import android.view.Gravity
 import android.view.MotionEvent
 import android.view.View
 import android.view.WindowManager
 import android.view.accessibility.AccessibilityEvent
-import android.widget.EditText
+import android.widget.ImageView
 import android.widget.LinearLayout
+import android.widget.ScrollView
 import android.widget.TextView
 import android.widget.Toast
+import com.app.autoclicker.R
 import com.app.autoclicker.models.*
+import com.app.autoclicker.ui.DialogHelper
 import com.app.autoclicker.ui.MainActivity
 import com.app.autoclicker.ui.SettingsActivity
 import kotlinx.coroutines.*
@@ -47,7 +49,7 @@ class AutoClickerService : AccessibilityService() {
     private lateinit var windowManager: WindowManager
     private var controlBarView: LinearLayout? = null
     private lateinit var controlBarParams: WindowManager.LayoutParams
-    private lateinit var btnPlay: TextView
+    private lateinit var btnPlay: ImageView
 
     private val targetViews = mutableListOf<View>()
     private val serviceScope = CoroutineScope(Dispatchers.Default + SupervisorJob())
@@ -62,7 +64,9 @@ class AutoClickerService : AccessibilityService() {
     private var isCollapsed = false
     private var activeAppPackage: String? = null
 
-    // Emergency stop when screen is locked / turned off
+    private fun Int.dp(): Int = (this * resources.displayMetrics.density).toInt()
+    private fun Float.dpF(): Float = this * resources.displayMetrics.density
+
     private val screenOffReceiver = object : BroadcastReceiver() {
         override fun onReceive(context: Context?, intent: Intent?) {
             if (intent?.action == Intent.ACTION_SCREEN_OFF) {
@@ -124,16 +128,17 @@ class AutoClickerService : AccessibilityService() {
 
         val bar = LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
+            gravity = Gravity.CENTER_HORIZONTAL
             background = GradientDrawable().apply {
                 setColor(Color.parseColor("#E61A1D24"))
-                setStroke(2, Color.parseColor("#383E4E"))
-                cornerRadius = 26f
+                setStroke(1.dp(), Color.parseColor("#383E4E"))
+                cornerRadius = 14f.dpF()
             }
-            setPadding(8, 12, 8, 12)
+            setPadding(4.dp(), 6.dp(), 4.dp(), 6.dp())
         }
 
-        // 1. Play / Pause Button (Responds immediately on tap)
-        btnPlay = createBarButton("▶").apply {
+        // 1. Play / Pause Vector Button
+        btnPlay = createBarVectorButton(R.drawable.ic_play, Color.WHITE).apply {
             setOnClickListener {
                 if (isRunning || isWaitingSchedule) {
                     stopClicking()
@@ -144,7 +149,7 @@ class AutoClickerService : AccessibilityService() {
         }
 
         // 2. Add Target (+)
-        val btnAdd = createBarButton("+").apply {
+        val btnAdd = createBarVectorButton(R.drawable.ic_add, Color.WHITE).apply {
             setOnClickListener {
                 if (!isRunning) addTarget(isSwipe = false)
             }
@@ -155,7 +160,7 @@ class AutoClickerService : AccessibilityService() {
         }
 
         // 3. Remove Target (−)
-        val btnRemove = createBarButton("−").apply {
+        val btnRemove = createBarVectorButton(R.drawable.ic_remove, Color.WHITE).apply {
             setOnClickListener {
                 if (!isRunning) removeLastTarget()
             }
@@ -165,8 +170,8 @@ class AutoClickerService : AccessibilityService() {
             }
         }
 
-        // 4. Open Settings (⚙) — Tap: Settings, Hold: Main App
-        val btnSettings = createBarButton("⚙").apply {
+        // 4. Open Settings (⚙)
+        val btnSettings = createBarVectorButton(R.drawable.ic_settings, Color.WHITE).apply {
             setOnClickListener {
                 if (isRunning) stopClicking()
                 val intent = Intent(this@AutoClickerService, SettingsActivity::class.java).apply {
@@ -185,7 +190,7 @@ class AutoClickerService : AccessibilityService() {
         }
 
         // 5. Collapse / Drag (>)
-        val btnCollapse = createBarButton(">").apply {
+        val btnCollapse = createBarVectorButton(R.drawable.ic_chevron_right, Color.WHITE).apply {
             var initialX = 0; var initialY = 0
             var initialTouchX = 0f; var initialTouchY = 0f
             var moved = false
@@ -223,8 +228,7 @@ class AutoClickerService : AccessibilityService() {
         }
 
         // 6. Close Floating Overlay (✕)
-        val btnClose = createBarButton("✕").apply {
-            setTextColor(Color.parseColor("#F87171"))
+        val btnClose = createBarVectorButton(R.drawable.ic_close, Color.parseColor("#F87171")).apply {
             setOnClickListener {
                 stopClicking()
                 hideOverlay()
@@ -247,10 +251,11 @@ class AutoClickerService : AccessibilityService() {
 
         windowManager.addView(bar, controlBarParams)
         controlBarView = bar
+        rebuildAllTargetBubbles()
     }
 
     fun hideOverlay() {
-        clearAllTargets()
+        removeAllTargetViewsOnly()
         controlBarView?.let {
             try { windowManager.removeView(it) } catch (_: Exception) {}
         }
@@ -265,13 +270,13 @@ class AutoClickerService : AccessibilityService() {
         targetViews.forEach { it.visibility = vis }
     }
 
-    private fun createBarButton(symbol: String): TextView {
-        return TextView(this).apply {
-            text = symbol
-            textSize = 19f
-            setTextColor(Color.WHITE)
-            gravity = Gravity.CENTER
-            setPadding(22, 13, 22, 13)
+    private fun createBarVectorButton(iconRes: Int, tintColor: Int): ImageView {
+        return ImageView(this).apply {
+            setImageResource(iconRes)
+            imageTintList = ColorStateList.valueOf(tintColor)
+            scaleType = ImageView.ScaleType.CENTER_INSIDE
+            setPadding(8.dp(), 9.dp(), 8.dp(), 9.dp())
+            layoutParams = LinearLayout.LayoutParams(42.dp(), 42.dp())
         }
     }
 
@@ -291,20 +296,34 @@ class AutoClickerService : AccessibilityService() {
         if (isSwipe) spawnTargetBubble(point, isEndNode = true)
     }
 
+    private fun rebuildAllTargetBubbles() {
+        removeAllTargetViewsOnly()
+        val cfg = ConfigStore.activeConfig
+        cfg.targets.forEachIndexed { idx, point ->
+            point.id = idx + 1
+            spawnTargetBubble(point, isEndNode = false)
+            if (point.isSwipe) spawnTargetBubble(point, isEndNode = true)
+        }
+    }
+
     private fun spawnTargetBubble(point: TargetPoint, isEndNode: Boolean) {
-        val label = if (!point.isSwipe) "${point.id}" else if (isEndNode) "${point.id}S" else "${point.id}E"
         val displayLabel = if (!point.isSwipe) "${point.id}" else if (isEndNode) "${point.id}E" else "${point.id}S"
+        val bgColor = when {
+            !point.enabled -> Color.parseColor("#B34B5563")
+            isEndNode -> Color.parseColor("#CCFF5722")
+            else -> Color.parseColor("#CC2979FF")
+        }
 
         val bubble = TextView(this).apply {
             text = displayLabel
             textSize = 14f
             setTypeface(null, Typeface.BOLD)
-            setTextColor(Color.WHITE)
+            setTextColor(if (point.enabled) Color.WHITE else Color.parseColor("#D1D5DB"))
             gravity = Gravity.CENTER
             background = GradientDrawable().apply {
                 shape = GradientDrawable.OVAL
-                setColor(if (isEndNode) Color.parseColor("#CCFF5722") else Color.parseColor("#CC2979FF"))
-                setStroke(3, Color.WHITE)
+                setColor(bgColor)
+                setStroke(3, if (point.enabled) Color.WHITE else Color.parseColor("#9CA3AF"))
             }
             width = 96
             height = 96
@@ -352,7 +371,7 @@ class AutoClickerService : AccessibilityService() {
                 }
                 MotionEvent.ACTION_UP -> {
                     if (!moved && !isRunning && ConfigStore.activeConfig.targetProgrammability) {
-                        openTargetConfigOverlay(point)
+                        openEditTargetDialog(point)
                     }
                     true
                 }
@@ -364,61 +383,242 @@ class AutoClickerService : AccessibilityService() {
         targetViews.add(bubble)
     }
 
-    private fun openTargetConfigOverlay(point: TargetPoint) {
+    // =========================================================================
+    // FULL "EDIT TARGET: X" DIALOG (MATCHING REFERENCE + PER-TARGET START AT)
+    // =========================================================================
+
+    private fun openEditTargetDialog(point: TargetPoint) {
         val cfg = ConfigStore.activeConfig
-        val wrapper = LinearLayout(this).apply {
+
+        val rootWrapper = LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
             background = GradientDrawable().apply {
                 setColor(Color.parseColor("#1A1D24"))
-                cornerRadius = 24f
-                setStroke(2, Color.parseColor("#2E3444"))
+                cornerRadius = 18f.dpF()
+                setStroke(1.dp(), Color.parseColor("#2E3444"))
             }
-            setPadding(44, 32, 44, 24)
+            setPadding(20.dp(), 18.dp(), 20.dp(), 14.dp())
         }
 
-        wrapper.addView(TextView(this).apply {
-            text = "Target #${point.id} Settings"
-            textSize = 18f
+        val tvTitle = TextView(this).apply {
+            text = "Edit Target: ${point.id}"
+            textSize = 20f
             setTypeface(null, Typeface.BOLD)
             setTextColor(Color.WHITE)
-            setPadding(0, 0, 0, 16)
-        })
+            setPadding(0, 0, 0, 14.dp())
+        }
+        rootWrapper.addView(tvTitle)
 
-        fun makeField(label: String, initial: Long): EditText {
-            wrapper.addView(TextView(this).apply {
-                text = label; textSize = 12f; setTextColor(Color.parseColor("#8A8F9E")); setPadding(0, 10, 0, 4)
-            })
-            return EditText(this).apply {
-                setText(initial.toString())
-                setTextColor(Color.WHITE)
-                inputType = InputType.TYPE_CLASS_NUMBER
-                backgroundTintList = ColorStateList.valueOf(Color.parseColor("#60A5FA"))
-                wrapper.addView(this)
+        // Top 2 Action Buttons: [ Remove ] (Orange) & [ Enabled / Disabled ] (Blue)
+        val topBtnRow = LinearLayout(this).apply {
+            orientation = LinearLayout.HORIZONTAL
+            layoutParams = LinearLayout.LayoutParams(
+                LinearLayout.LayoutParams.MATCH_PARENT,
+                LinearLayout.LayoutParams.WRAP_CONTENT
+            ).apply { bottomMargin = 14.dp() }
+        }
+
+        val btnRemoveTarget = TextView(this).apply {
+            text = "Remove"
+            textSize = 14.5f
+            setTypeface(null, Typeface.BOLD)
+            setTextColor(Color.WHITE)
+            gravity = Gravity.CENTER
+            setPadding(12.dp(), 12.dp(), 12.dp(), 12.dp())
+            background = GradientDrawable().apply {
+                setColor(Color.parseColor("#F59E0B"))
+                cornerRadius = 10f.dpF()
+            }
+            layoutParams = LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f).apply {
+                rightMargin = 10.dp()
             }
         }
 
-        val etStart = makeField("Start Delay (ms)", point.customStartDelayMs ?: cfg.startDelayMs)
-        val etEnd = makeField("End Delay (ms)", point.customEndDelayMs ?: cfg.endDelayMs)
-        val etDur = makeField("Duration (ms)", point.customDurationMs ?: cfg.durationMs)
+        val btnToggleEnabled = TextView(this).apply {
+            textSize = 14.5f
+            setTypeface(null, Typeface.BOLD)
+            setTextColor(Color.WHITE)
+            gravity = Gravity.CENTER
+            setPadding(12.dp(), 12.dp(), 12.dp(), 12.dp())
+            layoutParams = LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f)
+        }
 
-        val btnRow = LinearLayout(this).apply {
+        fun updateEnableBtnStyle() {
+            btnToggleEnabled.text = if (point.enabled) "Enabled" else "Disabled"
+            btnToggleEnabled.background = GradientDrawable().apply {
+                setColor(if (point.enabled) Color.parseColor("#2979FF") else Color.parseColor("#4B5563"))
+                cornerRadius = 10f.dpF()
+            }
+        }
+        updateEnableBtnStyle()
+
+        topBtnRow.addView(btnRemoveTarget)
+        topBtnRow.addView(btnToggleEnabled)
+        rootWrapper.addView(topBtnRow)
+
+        val scroll = ScrollView(this).apply {
+            layoutParams = LinearLayout.LayoutParams(
+                LinearLayout.LayoutParams.MATCH_PARENT,
+                340.dp()
+            )
+        }
+        val listContainer = LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
+        }
+        scroll.addView(listContainer)
+        rootWrapper.addView(scroll)
+
+        fun renderTargetOptions() {
+            listContainer.removeAllViews()
+
+            // Basic Settings:
+            listContainer.addView(createSectionLabel("Basic Settings:"))
+
+            val startAtText = if (!point.startAtEnabled) {
+                "Immediate"
+            } else {
+                DialogHelper.format12HourWithSeconds(point.startAtHour, point.startAtMinute, point.startAtSecond)
+            }
+            listContainer.addView(createOptionRow("Start At", startAtText) {
+                DialogHelper.showScheduleClockDialog(
+                    ctx = this,
+                    title = "Target #${point.id} Start At",
+                    description = "Schedule this specific target to execute at an exact time (Hour, Minute, Second).",
+                    immediateLabel = "Start Immediately (In Sequence)",
+                    specificLabel = "Start At Specific Time",
+                    isImmediateInitial = !point.startAtEnabled,
+                    initHour24 = point.startAtHour,
+                    initMinute = point.startAtMinute,
+                    initSecond = point.startAtSecond,
+                    includeSeconds = true,
+                    isOverlay = true
+                ) { isImm, h, m, s ->
+                    point.startAtEnabled = !isImm
+                    point.startAtHour = h
+                    point.startAtMinute = m
+                    point.startAtSecond = s
+                    renderTargetOptions()
+                }
+            })
+
+            val effStartDelay = point.customStartDelayMs ?: cfg.startDelayMs
+            val effStartRand = point.customStartDelayRandomMs ?: cfg.startDelayRandomMs
+            listContainer.addView(createOptionRow("Start Delay", "$effStartDelay Millisecond(s)") {
+                DialogHelper.showDelayDialog(
+                    ctx = this,
+                    title = "Start Delay",
+                    description = "Set the delay that occurs before Target #${point.id} runs.",
+                    currentDelay = effStartDelay,
+                    currentRand = effStartRand,
+                    isOverlay = true
+                ) { d, r ->
+                    point.customStartDelayMs = d
+                    point.customStartDelayRandomMs = r
+                    renderTargetOptions()
+                }
+            })
+
+            val effEndDelay = point.customEndDelayMs ?: cfg.endDelayMs
+            val effEndRand = point.customEndDelayRandomMs ?: cfg.endDelayRandomMs
+            listContainer.addView(createOptionRow("End Delay", "$effEndDelay Millisecond(s)") {
+                DialogHelper.showDelayDialog(
+                    ctx = this,
+                    title = "End Delay",
+                    description = "Set the delay that occurs after Target #${point.id} runs.",
+                    currentDelay = effEndDelay,
+                    currentRand = effEndRand,
+                    isOverlay = true
+                ) { d, r ->
+                    point.customEndDelayMs = d
+                    point.customEndDelayRandomMs = r
+                    renderTargetOptions()
+                }
+            })
+
+            val effDurVal = point.customDurationValue ?: cfg.durationValue
+            val effDurUnit = point.customDurationUnit ?: cfg.durationUnit
+            listContainer.addView(createOptionRow("Duration", "$effDurVal ${effDurUnit.label}") {
+                DialogHelper.showDurationDialog(
+                    ctx = this,
+                    description = "Set the click/swipe hold duration for Target #${point.id}.",
+                    currentVal = effDurVal,
+                    currentUnit = effDurUnit,
+                    isOverlay = true
+                ) { v, u ->
+                    point.customDurationValue = v
+                    point.customDurationUnit = u
+                    point.customDurationMs = v * u.multiplierMs
+                    renderTargetOptions()
+                }
+            })
+
+            // Advanced Settings:
+            listContainer.addView(createSectionLabel("Advanced Settings:"))
+
+            val repeatLabel = if (point.repeatCount <= 0) "Do Not Repeat" else "Repeat ${point.repeatCount} Time(s)"
+            listContainer.addView(createOptionRow("Repeat", repeatLabel) {
+                DialogHelper.showNumberDialog(
+                    ctx = this,
+                    title = "Repeat Target",
+                    description = "Set how many extra times Target #${point.id} repeats in each cycle.\n(0 = Do Not Repeat)",
+                    initialValue = point.repeatCount.toLong(),
+                    isOverlay = true
+                ) { count ->
+                    point.repeatCount = count.toInt().coerceAtLeast(0)
+                    renderTargetOptions()
+                }
+            })
+
+            val disableLabel = if (point.disableAfterRuns <= 0) "Do Not Disable" else "After ${point.disableAfterRuns} Run(s)"
+            listContainer.addView(createOptionRow("Disable After", disableLabel) {
+                DialogHelper.showNumberDialog(
+                    ctx = this,
+                    title = "Disable After",
+                    description = "Automatically disable Target #${point.id} after this many runs.\n(0 = Do Not Disable)",
+                    initialValue = point.disableAfterRuns.toLong(),
+                    isOverlay = true
+                ) { runs ->
+                    point.disableAfterRuns = runs.toInt().coerceAtLeast(0)
+                    renderTargetOptions()
+                }
+            })
+
+            // Randomization:
+            listContainer.addView(createSectionLabel("Randomization:"))
+
+            val effRadius = point.customRandomizationRadiusPx ?: cfg.randomizationRadiusPx
+            listContainer.addView(createOptionRow("Randomization Radius", "$effRadius Pixel(s)") {
+                DialogHelper.showNumberDialog(
+                    ctx = this,
+                    title = "Randomization Radius",
+                    description = "Set the radius in pixels around Target #${point.id} for random touch offset.\n(0 = No Randomization)",
+                    initialValue = effRadius.toLong(),
+                    isOverlay = true
+                ) { rad ->
+                    point.customRandomizationRadiusPx = rad.toInt().coerceAtLeast(0)
+                    renderTargetOptions()
+                }
+            })
+        }
+
+        renderTargetOptions()
+
+        val footer = LinearLayout(this).apply {
             orientation = LinearLayout.HORIZONTAL
             gravity = Gravity.END
-            setPadding(0, 24, 0, 0)
+            setPadding(0, 10.dp(), 0, 0)
         }
-        val btnCancel = TextView(this).apply {
-            text = "CANCEL"; textSize = 13f; setTypeface(null, Typeface.BOLD)
-            setTextColor(Color.parseColor("#9CA3AF")); setPadding(24, 14, 24, 14)
+        val btnCloseDialog = TextView(this).apply {
+            text = "CLOSE"
+            textSize = 13.5f
+            setTypeface(null, Typeface.BOLD)
+            setTextColor(Color.parseColor("#60A5FA"))
+            setPadding(16.dp(), 10.dp(), 8.dp(), 6.dp())
         }
-        val btnSave = TextView(this).apply {
-            text = "SAVE"; textSize = 13f; setTypeface(null, Typeface.BOLD)
-            setTextColor(Color.parseColor("#60A5FA")); setPadding(24, 14, 24, 14)
-        }
-        btnRow.addView(btnCancel)
-        btnRow.addView(btnSave)
-        wrapper.addView(btnRow)
+        footer.addView(btnCloseDialog)
+        rootWrapper.addView(footer)
 
-        val dialog = AlertDialog.Builder(this).setView(wrapper).create()
+        val dialog = AlertDialog.Builder(this).setView(rootWrapper).create()
         dialog.window?.apply {
             setBackgroundDrawableResource(android.R.color.transparent)
             setType(
@@ -428,14 +628,54 @@ class AutoClickerService : AccessibilityService() {
                     @Suppress("DEPRECATION") WindowManager.LayoutParams.TYPE_PHONE
             )
         }
-        btnCancel.setOnClickListener { dialog.dismiss() }
-        btnSave.setOnClickListener {
-            point.customStartDelayMs = etStart.text.toString().toLongOrNull()
-            point.customEndDelayMs = etEnd.text.toString().toLongOrNull()
-            point.customDurationMs = etDur.text.toString().toLongOrNull()
+
+        btnRemoveTarget.setOnClickListener {
+            cfg.targets.remove(point)
+            rebuildAllTargetBubbles()
             dialog.dismiss()
         }
+
+        btnToggleEnabled.setOnClickListener {
+            point.enabled = !point.enabled
+            updateEnableBtnStyle()
+            rebuildAllTargetBubbles()
+        }
+
+        btnCloseDialog.setOnClickListener {
+            rebuildAllTargetBubbles()
+            dialog.dismiss()
+        }
+
         dialog.show()
+    }
+
+    private fun createSectionLabel(label: String): TextView {
+        return TextView(this).apply {
+            text = label
+            textSize = 12.5f
+            setTypeface(null, Typeface.BOLD)
+            setTextColor(Color.parseColor("#60A5FA"))
+            setPadding(0, 12.dp(), 0, 6.dp())
+        }
+    }
+
+    private fun createOptionRow(title: String, subtitle: String, onClick: () -> Unit): LinearLayout {
+        return LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
+            setPadding(4.dp(), 8.dp(), 4.dp(), 8.dp())
+            setOnClickListener { onClick() }
+            addView(TextView(this@AutoClickerService).apply {
+                text = title
+                textSize = 16f
+                setTextColor(Color.parseColor("#F1F3F6"))
+            })
+            addView(TextView(this@AutoClickerService).apply {
+                text = subtitle
+                textSize = 12.5f
+                setTextColor(Color.parseColor("#8A8F9E"))
+                setPadding(0, 2.dp(), 0, 0)
+            })
+        }
     }
 
     private fun removeLastTarget() {
@@ -450,16 +690,20 @@ class AutoClickerService : AccessibilityService() {
         }
     }
 
-    private fun clearAllTargets() {
-        ConfigStore.activeConfig.targets.clear()
+    private fun removeAllTargetViewsOnly() {
         targetViews.forEach {
             try { windowManager.removeView(it) } catch (_: Exception) {}
         }
         targetViews.clear()
     }
 
+    private fun clearAllTargets() {
+        ConfigStore.activeConfig.targets.clear()
+        removeAllTargetViewsOnly()
+    }
+
     // =========================================================================
-    // CLICK LOOP WITH RELIABLE STOP & GESTURE COMPLETION
+    // CLICK LOOP WITH PER-TARGET START AT, REPEAT, DISABLE AFTER & SAFE STOP
     // =========================================================================
 
     private fun startClickingFlow() {
@@ -474,7 +718,8 @@ class AutoClickerService : AccessibilityService() {
             if (cfg.startMode == StartMode.START_AT_SPECIFIC_TIME) {
                 isWaitingSchedule = true
                 withContext(Dispatchers.Main) {
-                    btnPlay.text = "⏳"
+                    btnPlay.setImageResource(R.drawable.ic_clock)
+                    btnPlay.imageTintList = ColorStateList.valueOf(Color.parseColor("#FBBF24"))
                     Toast.makeText(
                         this@AutoClickerService,
                         "Scheduled for %02d:%02d:%02d".format(
@@ -500,7 +745,8 @@ class AutoClickerService : AccessibilityService() {
 
             isRunning = true
             withContext(Dispatchers.Main) {
-                btnPlay.text = "⏸"
+                btnPlay.setImageResource(R.drawable.ic_pause)
+                btnPlay.imageTintList = ColorStateList.valueOf(Color.parseColor("#34D399"))
                 if (!cfg.showActiveTargets || cfg.ghostAntiDetect) {
                     targetViews.forEach { it.visibility = View.INVISIBLE }
                 }
@@ -514,43 +760,79 @@ class AutoClickerService : AccessibilityService() {
                 computeTargetEpochMillis(cfg.stopAtHour, cfg.stopAtMinute, 0, 0)
             } else Long.MAX_VALUE
 
-            var runCount = 0
+            val perTargetRunCounts = mutableMapOf<Int, Int>()
+            val perTargetScheduledDone = mutableSetOf<Int>()
+            var totalCycles = 0
 
             while (isActive && isRunning) {
-                for (target in cfg.targets.toList()) {
+                val enabledTargets = cfg.targets.filter { it.enabled }
+                if (enabledTargets.isEmpty()) break
+
+                for (target in enabledTargets) {
                     if (!isActive || !isRunning) break
+                    if (!target.enabled) continue
 
-                    val ghostTimingJitter = if (cfg.ghostAntiDetect) Random.nextLong(3, 18) else 0L
-                    val ghostDurationJitter = if (cfg.ghostAntiDetect) Random.nextLong(5, 22) else 0L
-
-                    val sDelay = (target.customStartDelayMs ?: cfg.startDelayMs) +
-                            (if (cfg.startDelayRandomMs > 0) Random.nextLong(0, cfg.startDelayRandomMs + 1) else 0L) +
-                            ghostTimingJitter
-                    if (sDelay > 0) delay(sDelay)
-                    if (!isActive || !isRunning) break
-
-                    val duration = ((target.customDurationMs ?: cfg.durationMs) + ghostDurationJitter).coerceAtLeast(1L)
-                    val effectiveRadius = if (cfg.ghostAntiDetect) maxOf(cfg.randomizationRadiusPx, 6) else cfg.randomizationRadiusPx
-
-                    // Dispatch gesture and await completion (with timeout) so we never flood the UI thread
-                    withTimeoutOrNull(duration + 400L) {
-                        performTargetGestureSuspend(target, duration, effectiveRadius, cfg.ghostAntiDetect)
+                    // Per-target Start At Specific Time (with seconds)
+                    if (target.startAtEnabled && !perTargetScheduledDone.contains(target.id)) {
+                        val tEpoch = computeTargetEpochMillis(
+                            target.startAtHour, target.startAtMinute, target.startAtSecond, 0
+                        )
+                        while (isActive && isRunning) {
+                            val rem = tEpoch - System.currentTimeMillis()
+                            if (rem <= 0) break
+                            if (rem > 25) delay(rem - 20)
+                        }
+                        perTargetScheduledDone.add(target.id)
+                        if (!isActive || !isRunning) break
                     }
-                    if (!isActive || !isRunning) break
 
-                    val eDelay = (target.customEndDelayMs ?: cfg.endDelayMs) +
-                            (if (cfg.endDelayRandomMs > 0) Random.nextLong(0, cfg.endDelayRandomMs + 1) else 0L) +
-                            ghostTimingJitter
-                    // Always yield at least 12ms so touch events on the Stop button are processed immediately
-                    delay(eDelay.coerceAtLeast(12L))
+                    val executionsInCycle = 1 + target.repeatCount.coerceAtLeast(0)
+                    repeat(executionsInCycle) {
+                        if (!isActive || !isRunning || !target.enabled) return@repeat
+
+                        val ghostTimingJitter = if (cfg.ghostAntiDetect) Random.nextLong(3, 18) else 0L
+                        val ghostDurationJitter = if (cfg.ghostAntiDetect) Random.nextLong(5, 22) else 0L
+
+                        val baseStart = target.customStartDelayMs ?: cfg.startDelayMs
+                        val randStart = target.customStartDelayRandomMs ?: cfg.startDelayRandomMs
+                        val sDelay = baseStart +
+                                (if (randStart > 0) Random.nextLong(0, randStart + 1) else 0L) +
+                                ghostTimingJitter
+                        if (sDelay > 0) delay(sDelay)
+                        if (!isActive || !isRunning) return@repeat
+
+                        val baseDur = target.customDurationMs ?: cfg.durationMs
+                        val duration = (baseDur + ghostDurationJitter).coerceAtLeast(1L)
+                        val baseRad = target.customRandomizationRadiusPx ?: cfg.randomizationRadiusPx
+                        val effectiveRadius = if (cfg.ghostAntiDetect) maxOf(baseRad, 6) else baseRad
+
+                        withTimeoutOrNull(duration + 400L) {
+                            performTargetGestureSuspend(target, duration, effectiveRadius, cfg.ghostAntiDetect)
+                        }
+                        if (!isActive || !isRunning) return@repeat
+
+                        val baseEnd = target.customEndDelayMs ?: cfg.endDelayMs
+                        val randEnd = target.customEndDelayRandomMs ?: cfg.endDelayRandomMs
+                        val eDelay = baseEnd +
+                                (if (randEnd > 0) Random.nextLong(0, randEnd + 1) else 0L) +
+                                ghostTimingJitter
+                        delay(eDelay.coerceAtLeast(12L))
+
+                        val runsDone = (perTargetRunCounts[target.id] ?: 0) + 1
+                        perTargetRunCounts[target.id] = runsDone
+                        if (target.disableAfterRuns > 0 && runsDone >= target.disableAfterRuns) {
+                            target.enabled = false
+                            withContext(Dispatchers.Main) { rebuildAllTargetBubbles() }
+                        }
+                    }
                 }
 
                 if (!isActive || !isRunning) break
-                runCount++
+                totalCycles++
 
                 val shouldStop = when (cfg.stopMode) {
                     StopMode.INDEFINITE -> false
-                    StopMode.AFTER_RUN_COUNT -> runCount >= cfg.stopAfterRunCount
+                    StopMode.AFTER_RUN_COUNT -> totalCycles >= cfg.stopAfterRunCount
                     StopMode.AFTER_AMOUNT_OF_TIME -> (System.currentTimeMillis() - startTimeMs) >= cfg.stopAfterTimeMs
                     StopMode.AT_SPECIFIC_TIME -> System.currentTimeMillis() >= stopAtEpoch
                 }
@@ -566,7 +848,10 @@ class AutoClickerService : AccessibilityService() {
         isWaitingSchedule = false
         clickJob?.cancel()
         clickJob = null
-        if (::btnPlay.isInitialized) btnPlay.text = "▶"
+        if (::btnPlay.isInitialized) {
+            btnPlay.setImageResource(R.drawable.ic_play)
+            btnPlay.imageTintList = ColorStateList.valueOf(Color.WHITE)
+        }
         controlBarView?.alpha = 1.0f
         targetViews.forEach { it.visibility = if (isCollapsed) View.GONE else View.VISIBLE }
     }
