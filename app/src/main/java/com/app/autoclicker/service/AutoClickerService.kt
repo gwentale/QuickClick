@@ -530,11 +530,21 @@ class AutoClickerService : AccessibilityService() {
             height = bubbleSize
         }
 
-        val params = createOverlayWindowParams(bubbleSize, bubbleSize, touchable = !isRunning).apply {
-            val targetX = if (isEndNode) point.endX else point.x
-            val targetY = if (isEndNode) point.endY else point.y
-            x = (targetX - halfSize - originPhysicalX).roundToInt()
-            y = (targetY - halfSize - originPhysicalY).roundToInt()
+        val params = WindowManager.LayoutParams(
+            96, 96,
+            WindowManager.LayoutParams.TYPE_APPLICATION_OVERLAY,
+            WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE or
+                WindowManager.LayoutParams.FLAG_LAYOUT_IN_SCREEN or
+                WindowManager.LayoutParams.FLAG_LAYOUT_NO_LIMITS,
+            PixelFormat.TRANSLUCENT
+        ).apply {
+            gravity = Gravity.TOP or Gravity.START
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.P) {
+                layoutInDisplayCutoutMode =
+                    WindowManager.LayoutParams.LAYOUT_IN_DISPLAY_CUTOUT_MODE_SHORT_EDGES
+            }
+            x = ((if (isEndNode) point.endX else point.x) - 48f - windowOffsetX).toInt()
+            y = ((if (isEndNode) point.endY else point.y) - 48f - windowOffsetY).toInt()
         }
 
         val record = TargetBubbleRecord(bubble, params, point, isEndNode)
@@ -573,18 +583,35 @@ class AutoClickerService : AccessibilityService() {
                         params.x = initX + dx
                         params.y = initY + dy
                         windowManager.updateViewLayout(bubble, params)
-                        updatePointFromCurrentParams()
+                        if (isEndNode) {
+                            point.endX = params.x + windowOffsetX + 48f
+                            point.endY = params.y + windowOffsetY + 48f
+                        } else {
+                            point.x = params.x + windowOffsetX + 48f
+                            point.y = params.y + windowOffsetY + 48f
+                        }
                     }
                     true
                 }
                 MotionEvent.ACTION_UP -> {
                     if (moved) {
-                        val dx = (e.rawX - touchX).roundToInt()
-                        val dy = (e.rawY - touchY).roundToInt()
-                        params.x = initX + dx
-                        params.y = initY + dy
-                        windowManager.updateViewLayout(bubble, params)
-                        updatePointFromCurrentParams()
+                        bubble.post {
+                            if (!bubble.isAttachedToWindow) return@post
+                            val loc = IntArray(2)
+                            bubble.getLocationOnScreen(loc)
+                            windowOffsetX = (loc[0] - params.x).toFloat()
+                            windowOffsetY = (loc[1] - params.y).toFloat()
+                            isWindowOffsetCalibrated = true
+                            val cx = loc[0] + 48f
+                            val cy = loc[1] + 48f
+                            if (isEndNode) {
+                                point.endX = cx
+                                point.endY = cy
+                            } else {
+                                point.x = cx
+                                point.y = cy
+                            }
+                        }
                     } else if (!isRunning && ConfigStore.activeConfig.targetProgrammability) {
                         openEditTargetDialog(point)
                     }
@@ -595,8 +622,45 @@ class AutoClickerService : AccessibilityService() {
         }
 
         windowManager.addView(bubble, params)
+        bubble.post {
+            if (!bubble.isAttachedToWindow) return@post
+            val loc = IntArray(2)
+            bubble.getLocationOnScreen(loc)
+            val actualOffsetX = (loc[0] - params.x).toFloat()
+            val actualOffsetY = (loc[1] - params.y).toFloat()
+            if (!isWindowOffsetCalibrated || actualOffsetX != windowOffsetX || actualOffsetY != windowOffsetY) {
+                windowOffsetX = actualOffsetX
+                windowOffsetY = actualOffsetY
+                isWindowOffsetCalibrated = true
+                val targetX = if (isEndNode) point.endX else point.x
+                val targetY = if (isEndNode) point.endY else point.y
+                params.x = (targetX - 48f - windowOffsetX).toInt()
+                params.y = (targetY - 48f - windowOffsetY).toInt()
+                try {
+                    windowManager.updateViewLayout(bubble, params)
+                } catch (_: Exception) {}
+            }
+        }
         targetViews.add(bubble)
         targetBubbleRecords.add(record)
+    }
+
+    private fun setTargetBubblesTouchable(touchable: Boolean) {
+        targetBubbleRecords.forEach { rec ->
+            val newFlags = if (touchable) {
+                rec.params.flags and WindowManager.LayoutParams.FLAG_NOT_TOUCHABLE.inv()
+            } else {
+                rec.params.flags or WindowManager.LayoutParams.FLAG_NOT_TOUCHABLE
+            }
+            if (rec.params.flags != newFlags) {
+                rec.params.flags = newFlags
+                if (rec.view.isAttachedToWindow) {
+                    try {
+                        windowManager.updateViewLayout(rec.view, rec.params)
+                    } catch (_: Exception) {}
+                }
+            }
+        }
     }
 
     private fun openEditTargetDialog(point: TargetPoint) {
@@ -956,10 +1020,10 @@ class AutoClickerService : AccessibilityService() {
                 setTargetBubblesTouchable(false)
                 btnPlay.setImageResource(R.drawable.ic_pause)
                 btnPlay.imageTintList = ColorStateList.valueOf(Color.parseColor("#34D399"))
-                if (!cfg.showActiveTargets || cfg.ghostAntiDetect) {
+                if (!cfg.showActiveTargets || cfg.ghostAntiDetect || cfg.singleBurstMode) {
                     targetViews.forEach { it.visibility = View.INVISIBLE }
                 }
-                if (cfg.ghostAntiDetect) {
+                if (cfg.ghostAntiDetect || cfg.singleBurstMode) {
                     controlBarView?.alpha = 0.45f
                 }
             }
@@ -1030,13 +1094,27 @@ class AutoClickerService : AccessibilityService() {
                         perTargetRunCounts[target.id] = runsDone
                         if (target.disableAfterRuns > 0 && runsDone >= target.disableAfterRuns) {
                             target.enabled = false
-                            withContext(Dispatchers.Main) { rebuildAllTargetBubbles() }
+                            withContext(Dispatchers.Main) {
+                                rebuildAllTargetBubbles()
+                                setTargetBubblesTouchable(false)
+                            }
                         }
                     }
                 }
 
                 if (!isActive || !isRunning) break
                 totalCycles++
+
+                if (cfg.singleBurstMode) {
+                    withContext(Dispatchers.Main) {
+                        Toast.makeText(
+                            this@AutoClickerService,
+                            "Single-burst completed (1 pass)",
+                            Toast.LENGTH_SHORT
+                        ).show()
+                    }
+                    break
+                }
 
                 val shouldStop = when (cfg.stopMode) {
                     StopMode.INDEFINITE -> false
@@ -1085,24 +1163,17 @@ class AutoClickerService : AccessibilityService() {
         radiusPx: Int,
         ghostMode: Boolean
     ) = suspendCancellableCoroutine { cont ->
-        val (screenW, screenH) = getRealScreenSize()
-        val maxX = (screenW - 1).coerceAtLeast(1).toFloat()
-        val maxY = (screenH - 1).coerceAtLeast(1).toFloat()
-
         val (rawRx, rawRy) = applyRandomRadius(target.x, target.y, radiusPx)
-        val rx = rawRx.coerceIn(1f, maxX)
-        val ry = rawRy.coerceIn(1f, maxY)
-
+        val rx = rawRx.coerceAtLeast(1f)
+        val ry = rawRy.coerceAtLeast(1f)
         val path = Path().apply {
             moveTo(rx, ry)
             if (target.isSwipe) {
                 val (rawEx, rawEy) = applyRandomRadius(target.endX, target.endY, radiusPx)
-                val ex = rawEx.coerceIn(1f, maxX)
-                val ey = rawEy.coerceIn(1f, maxY)
-                lineTo(ex, ey)
+                lineTo(rawEx.coerceAtLeast(1f), rawEy.coerceAtLeast(1f))
             } else if (ghostMode) {
-                val driftX = (rx + Random.nextFloat() * 3f - 1.5f).coerceIn(1f, maxX)
-                val driftY = (ry + Random.nextFloat() * 3f - 1.5f).coerceIn(1f, maxY)
+                val driftX = (rx + Random.nextFloat() * 3f - 1.5f).coerceAtLeast(1f)
+                val driftY = (ry + Random.nextFloat() * 3f - 1.5f).coerceAtLeast(1f)
                 lineTo(driftX, driftY)
             }
         }
