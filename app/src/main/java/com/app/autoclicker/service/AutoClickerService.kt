@@ -8,9 +8,11 @@ import android.content.Context
 import android.content.Intent
 import android.content.IntentFilter
 import android.content.res.ColorStateList
+import android.content.res.Configuration
 import android.graphics.Color
 import android.graphics.Path
 import android.graphics.PixelFormat
+import android.graphics.Point
 import android.graphics.Typeface
 import android.graphics.drawable.GradientDrawable
 import android.os.Build
@@ -19,6 +21,7 @@ import android.os.Looper
 import android.view.Gravity
 import android.view.MotionEvent
 import android.view.View
+import android.view.WindowInsets
 import android.view.WindowManager
 import android.view.accessibility.AccessibilityEvent
 import android.widget.ImageView
@@ -36,6 +39,7 @@ import java.util.Calendar
 import kotlin.coroutines.resume
 import kotlin.math.abs
 import kotlin.math.cos
+import kotlin.math.roundToInt
 import kotlin.math.sin
 import kotlin.random.Random
 
@@ -52,7 +56,23 @@ class AutoClickerService : AccessibilityService() {
     private lateinit var btnPlay: ImageView
     private lateinit var btnCollapse: ImageView
 
+    private data class TargetBubbleRecord(
+        val view: View,
+        val params: WindowManager.LayoutParams,
+        val point: TargetPoint,
+        val isEndNode: Boolean
+    )
+
     private val targetViews = mutableListOf<View>()
+    private val targetBubbleRecords = mutableListOf<TargetBubbleRecord>()
+    private var probeView: View? = null
+
+    @Volatile
+    private var originPhysicalX = 0f
+
+    @Volatile
+    private var originPhysicalY = 0f
+
     private val serviceScope = CoroutineScope(Dispatchers.Default + SupervisorJob())
     private var clickJob: Job? = null
 
@@ -68,6 +88,11 @@ class AutoClickerService : AccessibilityService() {
     private fun Int.dp(): Int = (this * resources.displayMetrics.density).toInt()
     private fun Float.dpF(): Float = this * resources.displayMetrics.density
 
+    private fun getBubbleSizePx(): Int {
+        val raw = 36.dp().coerceAtLeast(72)
+        return (raw / 2) * 2
+    }
+
     private val screenOffReceiver = object : BroadcastReceiver() {
         override fun onReceive(context: Context?, intent: Intent?) {
             if (intent?.action == Intent.ACTION_SCREEN_OFF) {
@@ -81,6 +106,11 @@ class AutoClickerService : AccessibilityService() {
         windowManager = getSystemService(WINDOW_SERVICE) as WindowManager
         instance = this
         registerReceiver(screenOffReceiver, IntentFilter(Intent.ACTION_SCREEN_OFF))
+    }
+
+    override fun onConfigurationChanged(newConfig: Configuration) {
+        super.onConfigurationChanged(newConfig)
+        probeView?.post { updateOriginFromProbe(probeView) }
     }
 
     override fun onUnbind(intent: Intent?): Boolean {
@@ -251,6 +281,7 @@ class AutoClickerService : AccessibilityService() {
             y = 280
         }
 
+        attachScreenOriginProbe()
         windowManager.addView(bar, controlBarParams)
         controlBarView = bar
         rebuildAllTargetBubbles()
@@ -258,11 +289,135 @@ class AutoClickerService : AccessibilityService() {
 
     fun hideOverlay() {
         removeAllTargetViewsOnly()
+        probeView?.let {
+            try { windowManager.removeView(it) } catch (_: Exception) {}
+        }
+        probeView = null
         controlBarView?.let {
             try { windowManager.removeView(it) } catch (_: Exception) {}
         }
         controlBarView = null
         isCollapsed = false
+    }
+
+    private fun createOverlayWindowParams(widthPx: Int, heightPx: Int, touchable: Boolean): WindowManager.LayoutParams {
+        var flags = WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE or
+            WindowManager.LayoutParams.FLAG_LAYOUT_IN_SCREEN or
+            WindowManager.LayoutParams.FLAG_LAYOUT_NO_LIMITS
+        if (!touchable) {
+            flags = flags or WindowManager.LayoutParams.FLAG_NOT_TOUCHABLE
+        }
+        return WindowManager.LayoutParams(
+            widthPx,
+            heightPx,
+            WindowManager.LayoutParams.TYPE_APPLICATION_OVERLAY,
+            flags,
+            PixelFormat.TRANSLUCENT
+        ).apply {
+            gravity = Gravity.TOP or Gravity.START
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.P) {
+                layoutInDisplayCutoutMode =
+                    WindowManager.LayoutParams.LAYOUT_IN_DISPLAY_CUTOUT_MODE_SHORT_EDGES
+            }
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
+                fitInsetsTypes = 0
+                fitInsetsSides = 0
+            }
+        }
+    }
+
+    private fun attachScreenOriginProbe() {
+        if (probeView != null) return
+        val probe = View(this).apply {
+            setBackgroundColor(Color.TRANSPARENT)
+        }
+        val params = createOverlayWindowParams(1, 1, touchable = false).apply {
+            x = 0
+            y = 0
+        }
+        probe.setOnApplyWindowInsetsListener { v, insets ->
+            updateOriginFromProbe(v)
+            insets
+        }
+        windowManager.addView(probe, params)
+        probeView = probe
+        probe.post { updateOriginFromProbe(probe) }
+    }
+
+    private fun updateOriginFromProbe(v: View?) {
+        if (v == null || !v.isAttachedToWindow) return
+
+        var displayLeftInset = 0
+        var displayTopInset = 0
+
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
+            val metrics = windowManager.maximumWindowMetrics
+            val insets = metrics.windowInsets.getInsetsIgnoringVisibility(
+                WindowInsets.Type.statusBars() or WindowInsets.Type.displayCutout()
+            )
+            displayLeftInset = insets.left
+            displayTopInset = insets.top
+        } else {
+            val resId = resources.getIdentifier("status_bar_height", "dimen", "android")
+            val statusBarH = if (resId > 0) resources.getDimensionPixelSize(resId) else 0
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.P) {
+                val cutout = v.rootWindowInsets?.displayCutout
+                displayLeftInset = cutout?.safeInsetLeft ?: 0
+                displayTopInset = maxOf(statusBarH, cutout?.safeInsetTop ?: 0)
+            } else {
+                displayTopInset = statusBarH
+            }
+        }
+
+        val loc = IntArray(2)
+        v.getLocationOnScreen(loc)
+
+        var windowLeftInset = 0
+        var windowTopInset = 0
+        val rootInsets = v.rootWindowInsets
+        if (rootInsets != null) {
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
+                val winInsets = rootInsets.getInsetsIgnoringVisibility(
+                    WindowInsets.Type.statusBars() or WindowInsets.Type.displayCutout()
+                )
+                windowLeftInset = winInsets.left
+                windowTopInset = winInsets.top
+            } else {
+                @Suppress("DEPRECATION")
+                windowLeftInset = rootInsets.systemWindowInsetLeft
+                @Suppress("DEPRECATION")
+                windowTopInset = rootInsets.systemWindowInsetTop
+            }
+        }
+
+        val newOriginX = if (loc[0] > 0) {
+            loc[0].toFloat()
+        } else {
+            (displayLeftInset - windowLeftInset).coerceAtLeast(0).toFloat()
+        }
+        val newOriginY = if (loc[1] > 0) {
+            loc[1].toFloat()
+        } else {
+            (displayTopInset - windowTopInset).coerceAtLeast(0).toFloat()
+        }
+
+        if (newOriginX != originPhysicalX || newOriginY != originPhysicalY) {
+            originPhysicalX = newOriginX
+            originPhysicalY = newOriginY
+            repositionAllTargetBubbles()
+        }
+    }
+
+    private fun getRealScreenSize(): Pair<Int, Int> {
+        return if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
+            val bounds = windowManager.maximumWindowMetrics.bounds
+            bounds.width().coerceAtLeast(1) to bounds.height().coerceAtLeast(1)
+        } else {
+            val pt = Point()
+            @Suppress("DEPRECATION")
+            windowManager.defaultDisplay.getRealSize(pt)
+            pt.x.coerceAtLeast(1) to pt.y.coerceAtLeast(1)
+        }
     }
 
     private fun toggleCollapse(views: List<View>) {
@@ -289,13 +444,16 @@ class AutoClickerService : AccessibilityService() {
     private fun addTarget(isSwipe: Boolean) {
         val cfg = ConfigStore.activeConfig
         val id = cfg.targets.size + 1
+        val (screenW, screenH) = getRealScreenSize()
+        val initX = ((screenW * 0.40f) + (id * 30f)).coerceIn(60f, (screenW - 60).coerceAtLeast(61).toFloat())
+        val initY = ((screenH * 0.35f) + (id * 30f)).coerceIn(120f, (screenH - 120).coerceAtLeast(121).toFloat())
         val point = TargetPoint(
             id = id,
-            x = 400f + (id * 30),
-            y = 700f + (id * 30),
+            x = initX,
+            y = initY,
             isSwipe = isSwipe,
-            endX = 400f + (id * 30),
-            endY = 450f + (id * 30)
+            endX = initX,
+            endY = (initY - 220f).coerceAtLeast(120f)
         )
         cfg.targets.add(point)
         spawnTargetBubble(point, isEndNode = false)
@@ -312,6 +470,40 @@ class AutoClickerService : AccessibilityService() {
         }
     }
 
+    private fun repositionAllTargetBubbles() {
+        val bubbleSize = getBubbleSizePx()
+        val halfSize = bubbleSize / 2f
+        targetBubbleRecords.forEach { rec ->
+            val targetX = if (rec.isEndNode) rec.point.endX else rec.point.x
+            val targetY = if (rec.isEndNode) rec.point.endY else rec.point.y
+            rec.params.x = (targetX - halfSize - originPhysicalX).roundToInt()
+            rec.params.y = (targetY - halfSize - originPhysicalY).roundToInt()
+            if (rec.view.isAttachedToWindow) {
+                try {
+                    windowManager.updateViewLayout(rec.view, rec.params)
+                } catch (_: Exception) {}
+            }
+        }
+    }
+
+    private fun setTargetBubblesTouchable(touchable: Boolean) {
+        targetBubbleRecords.forEach { rec ->
+            val newFlags = if (touchable) {
+                rec.params.flags and WindowManager.LayoutParams.FLAG_NOT_TOUCHABLE.inv()
+            } else {
+                rec.params.flags or WindowManager.LayoutParams.FLAG_NOT_TOUCHABLE
+            }
+            if (rec.params.flags != newFlags) {
+                rec.params.flags = newFlags
+                if (rec.view.isAttachedToWindow) {
+                    try {
+                        windowManager.updateViewLayout(rec.view, rec.params)
+                    } catch (_: Exception) {}
+                }
+            }
+        }
+    }
+
     private fun spawnTargetBubble(point: TargetPoint, isEndNode: Boolean) {
         val displayLabel = if (!point.isSwipe) "${point.id}" else if (isEndNode) "${point.id}E" else "${point.id}S"
         val bgColor = when {
@@ -319,6 +511,9 @@ class AutoClickerService : AccessibilityService() {
             isEndNode -> Color.parseColor("#CCFF5722")
             else -> Color.parseColor("#CC2979FF")
         }
+
+        val bubbleSize = getBubbleSizePx()
+        val halfSize = bubbleSize / 2f
 
         val bubble = TextView(this).apply {
             text = displayLabel
@@ -331,23 +526,36 @@ class AutoClickerService : AccessibilityService() {
                 setColor(bgColor)
                 setStroke(3, if (point.enabled) Color.WHITE else Color.parseColor("#9CA3AF"))
             }
-            width = 96
-            height = 96
+            width = bubbleSize
+            height = bubbleSize
         }
 
-        val params = WindowManager.LayoutParams(
-            96, 96,
-            WindowManager.LayoutParams.TYPE_APPLICATION_OVERLAY,
-            WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE,
-            PixelFormat.TRANSLUCENT
-        ).apply {
-            gravity = Gravity.TOP or Gravity.START
-            x = (if (isEndNode) point.endX else point.x).toInt() - 48
-            y = (if (isEndNode) point.endY else point.y).toInt() - 48
+        val params = createOverlayWindowParams(bubbleSize, bubbleSize, touchable = !isRunning).apply {
+            val targetX = if (isEndNode) point.endX else point.x
+            val targetY = if (isEndNode) point.endY else point.y
+            x = (targetX - halfSize - originPhysicalX).roundToInt()
+            y = (targetY - halfSize - originPhysicalY).roundToInt()
         }
+
+        val record = TargetBubbleRecord(bubble, params, point, isEndNode)
 
         var initX = 0; var initY = 0; var touchX = 0f; var touchY = 0f
         var moved = false
+
+        fun updatePointFromCurrentParams() {
+            val (screenW, screenH) = getRealScreenSize()
+            val physX = (params.x + halfSize + originPhysicalX)
+                .coerceIn(1f, (screenW - 1).coerceAtLeast(1).toFloat())
+            val physY = (params.y + halfSize + originPhysicalY)
+                .coerceIn(1f, (screenH - 1).coerceAtLeast(1).toFloat())
+            if (isEndNode) {
+                point.endX = physX
+                point.endY = physY
+            } else {
+                point.x = physX
+                point.y = physY
+            }
+        }
 
         bubble.setOnTouchListener { _, e ->
             when (e.action) {
@@ -358,25 +566,26 @@ class AutoClickerService : AccessibilityService() {
                     true
                 }
                 MotionEvent.ACTION_MOVE -> {
-                    val dx = (e.rawX - touchX).toInt()
-                    val dy = (e.rawY - touchY).toInt()
-                    if (abs(dx) > 8 || abs(dy) > 8) {
+                    val dx = (e.rawX - touchX).roundToInt()
+                    val dy = (e.rawY - touchY).roundToInt()
+                    if (abs(dx) > 6 || abs(dy) > 6) {
                         moved = true
                         params.x = initX + dx
                         params.y = initY + dy
                         windowManager.updateViewLayout(bubble, params)
-                        if (isEndNode) {
-                            point.endX = params.x + 48f
-                            point.endY = params.y + 48f
-                        } else {
-                            point.x = params.x + 48f
-                            point.y = params.y + 48f
-                        }
+                        updatePointFromCurrentParams()
                     }
                     true
                 }
                 MotionEvent.ACTION_UP -> {
-                    if (!moved && !isRunning && ConfigStore.activeConfig.targetProgrammability) {
+                    if (moved) {
+                        val dx = (e.rawX - touchX).roundToInt()
+                        val dy = (e.rawY - touchY).roundToInt()
+                        params.x = initX + dx
+                        params.y = initY + dy
+                        windowManager.updateViewLayout(bubble, params)
+                        updatePointFromCurrentParams()
+                    } else if (!isRunning && ConfigStore.activeConfig.targetProgrammability) {
                         openEditTargetDialog(point)
                     }
                     true
@@ -387,6 +596,7 @@ class AutoClickerService : AccessibilityService() {
 
         windowManager.addView(bubble, params)
         targetViews.add(bubble)
+        targetBubbleRecords.add(record)
     }
 
     private fun openEditTargetDialog(point: TargetPoint) {
@@ -685,6 +895,9 @@ class AutoClickerService : AccessibilityService() {
             if (targetViews.isNotEmpty()) {
                 try { windowManager.removeView(targetViews.removeAt(targetViews.lastIndex)) } catch (_: Exception) {}
             }
+            if (targetBubbleRecords.isNotEmpty()) {
+                targetBubbleRecords.removeAt(targetBubbleRecords.lastIndex)
+            }
         }
     }
 
@@ -693,6 +906,7 @@ class AutoClickerService : AccessibilityService() {
             try { windowManager.removeView(it) } catch (_: Exception) {}
         }
         targetViews.clear()
+        targetBubbleRecords.clear()
     }
 
     private fun clearAllTargets() {
@@ -739,6 +953,7 @@ class AutoClickerService : AccessibilityService() {
 
             isRunning = true
             withContext(Dispatchers.Main) {
+                setTargetBubblesTouchable(false)
                 btnPlay.setImageResource(R.drawable.ic_pause)
                 btnPlay.imageTintList = ColorStateList.valueOf(Color.parseColor("#34D399"))
                 if (!cfg.showActiveTargets || cfg.ghostAntiDetect) {
@@ -846,6 +1061,7 @@ class AutoClickerService : AccessibilityService() {
             btnPlay.imageTintList = ColorStateList.valueOf(Color.WHITE)
         }
         controlBarView?.alpha = 1.0f
+        setTargetBubblesTouchable(true)
         targetViews.forEach { it.visibility = if (isCollapsed) View.GONE else View.VISIBLE }
     }
 
@@ -869,15 +1085,24 @@ class AutoClickerService : AccessibilityService() {
         radiusPx: Int,
         ghostMode: Boolean
     ) = suspendCancellableCoroutine { cont ->
-        val (rx, ry) = applyRandomRadius(target.x, target.y, radiusPx)
+        val (screenW, screenH) = getRealScreenSize()
+        val maxX = (screenW - 1).coerceAtLeast(1).toFloat()
+        val maxY = (screenH - 1).coerceAtLeast(1).toFloat()
+
+        val (rawRx, rawRy) = applyRandomRadius(target.x, target.y, radiusPx)
+        val rx = rawRx.coerceIn(1f, maxX)
+        val ry = rawRy.coerceIn(1f, maxY)
+
         val path = Path().apply {
             moveTo(rx, ry)
             if (target.isSwipe) {
-                val (ex, ey) = applyRandomRadius(target.endX, target.endY, radiusPx)
+                val (rawEx, rawEy) = applyRandomRadius(target.endX, target.endY, radiusPx)
+                val ex = rawEx.coerceIn(1f, maxX)
+                val ey = rawEy.coerceIn(1f, maxY)
                 lineTo(ex, ey)
             } else if (ghostMode) {
-                val driftX = rx + Random.nextFloat() * 3f - 1.5f
-                val driftY = ry + Random.nextFloat() * 3f - 1.5f
+                val driftX = (rx + Random.nextFloat() * 3f - 1.5f).coerceIn(1f, maxX)
+                val driftY = (ry + Random.nextFloat() * 3f - 1.5f).coerceIn(1f, maxY)
                 lineTo(driftX, driftY)
             }
         }
