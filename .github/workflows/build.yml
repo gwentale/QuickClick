@@ -103,6 +103,11 @@ jobs:
           echo "=== TOP 10 LARGEST FILES IN APK ==="
           unzip -l "$OUT_APK" | sort -k1 -n -r | head -n 12
 
+          AAPT2="$ANDROID_HOME/build-tools/$(ls "$ANDROID_HOME/build-tools" | sort -V | tail -n 1)/aapt2"
+          echo "=== APK IDENTITY CHECK ==="
+          "$AAPT2" dump badging "$OUT_APK" | grep -E "^package:|^application-label:"
+          
+
       - name: Upload Signed APK Artifact
         uses: actions/upload-artifact@v5
         with:
