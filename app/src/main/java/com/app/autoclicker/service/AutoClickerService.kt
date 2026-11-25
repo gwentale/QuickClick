@@ -50,6 +50,7 @@ class AutoClickerService : AccessibilityService() {
     private var controlBarView: LinearLayout? = null
     private lateinit var controlBarParams: WindowManager.LayoutParams
     private lateinit var btnPlay: ImageView
+    private lateinit var btnCollapse: ImageView
 
     private val targetViews = mutableListOf<View>()
     private val serviceScope = CoroutineScope(Dispatchers.Default + SupervisorJob())
@@ -137,7 +138,7 @@ class AutoClickerService : AccessibilityService() {
             setPadding(4.dp(), 6.dp(), 4.dp(), 6.dp())
         }
 
-        // 1. Play / Pause Vector Button
+        // 1. Play / Pause
         btnPlay = createBarVectorButton(R.drawable.ic_play, Color.WHITE).apply {
             setOnClickListener {
                 if (isRunning || isWaitingSchedule) {
@@ -189,8 +190,16 @@ class AutoClickerService : AccessibilityService() {
             }
         }
 
-        // 5. Collapse / Drag (>)
-        val btnCollapse = createBarVectorButton(R.drawable.ic_chevron_right, Color.WHITE).apply {
+        // 5. Close Floating Overlay (✕)
+        val btnClose = createBarVectorButton(R.drawable.ic_close, Color.parseColor("#F87171")).apply {
+            setOnClickListener {
+                stopClicking()
+                hideOverlay()
+            }
+        }
+
+        // TOP BUTTON: Drag Handle + Shrink (<) / Expand (>)
+        btnCollapse = createBarVectorButton(R.drawable.ic_chevron_left, Color.parseColor("#60A5FA")).apply {
             var initialX = 0; var initialY = 0
             var initialTouchX = 0f; var initialTouchY = 0f
             var moved = false
@@ -218,7 +227,7 @@ class AutoClickerService : AccessibilityService() {
                     }
                     MotionEvent.ACTION_UP -> {
                         if (!moved) {
-                            toggleCollapse(listOf(btnPlay, btnAdd, btnRemove, btnSettings))
+                            toggleCollapse(listOf(btnPlay, btnAdd, btnRemove, btnSettings, btnClose))
                         }
                         true
                     }
@@ -227,15 +236,8 @@ class AutoClickerService : AccessibilityService() {
             }
         }
 
-        // 6. Close Floating Overlay (✕)
-        val btnClose = createBarVectorButton(R.drawable.ic_close, Color.parseColor("#F87171")).apply {
-            setOnClickListener {
-                stopClicking()
-                hideOverlay()
-            }
-        }
-
-        listOf(btnPlay, btnAdd, btnRemove, btnSettings, btnCollapse, btnClose).forEach { bar.addView(it) }
+        // Order: Top Drag/Shrink/Expand (< / >), Play, Add, Remove, Settings, Close
+        listOf(btnCollapse, btnPlay, btnAdd, btnRemove, btnSettings, btnClose).forEach { bar.addView(it) }
 
         controlBarParams = WindowManager.LayoutParams(
             WindowManager.LayoutParams.WRAP_CONTENT,
@@ -268,6 +270,10 @@ class AutoClickerService : AccessibilityService() {
         val vis = if (isCollapsed) View.GONE else View.VISIBLE
         views.forEach { it.visibility = vis }
         targetViews.forEach { it.visibility = vis }
+        // '>' = Expand (when collapsed), '<' = Shrink/Close (when expanded)
+        btnCollapse.setImageResource(
+            if (isCollapsed) R.drawable.ic_chevron_right else R.drawable.ic_chevron_left
+        )
     }
 
     private fun createBarVectorButton(iconRes: Int, tintColor: Int): ImageView {
@@ -383,10 +389,6 @@ class AutoClickerService : AccessibilityService() {
         targetViews.add(bubble)
     }
 
-    // =========================================================================
-    // FULL "EDIT TARGET: X" DIALOG (MATCHING REFERENCE + PER-TARGET START AT)
-    // =========================================================================
-
     private fun openEditTargetDialog(point: TargetPoint) {
         val cfg = ConfigStore.activeConfig
 
@@ -409,7 +411,6 @@ class AutoClickerService : AccessibilityService() {
         }
         rootWrapper.addView(tvTitle)
 
-        // Top 2 Action Buttons: [ Remove ] (Orange) & [ Enabled / Disabled ] (Blue)
         val topBtnRow = LinearLayout(this).apply {
             orientation = LinearLayout.HORIZONTAL
             layoutParams = LinearLayout.LayoutParams(
@@ -471,7 +472,6 @@ class AutoClickerService : AccessibilityService() {
         fun renderTargetOptions() {
             listContainer.removeAllViews()
 
-            // Basic Settings:
             listContainer.addView(createSectionLabel("Basic Settings:"))
 
             val startAtText = if (!point.startAtEnabled) {
@@ -552,7 +552,6 @@ class AutoClickerService : AccessibilityService() {
                 }
             })
 
-            // Advanced Settings:
             listContainer.addView(createSectionLabel("Advanced Settings:"))
 
             val repeatLabel = if (point.repeatCount <= 0) "Do Not Repeat" else "Repeat ${point.repeatCount} Time(s)"
@@ -583,7 +582,6 @@ class AutoClickerService : AccessibilityService() {
                 }
             })
 
-            // Randomization:
             listContainer.addView(createSectionLabel("Randomization:"))
 
             val effRadius = point.customRandomizationRadiusPx ?: cfg.randomizationRadiusPx
@@ -702,10 +700,6 @@ class AutoClickerService : AccessibilityService() {
         removeAllTargetViewsOnly()
     }
 
-    // =========================================================================
-    // CLICK LOOP WITH PER-TARGET START AT, REPEAT, DISABLE AFTER & SAFE STOP
-    // =========================================================================
-
     private fun startClickingFlow() {
         val cfg = ConfigStore.activeConfig
         if (cfg.targets.isEmpty()) {
@@ -772,7 +766,6 @@ class AutoClickerService : AccessibilityService() {
                     if (!isActive || !isRunning) break
                     if (!target.enabled) continue
 
-                    // Per-target Start At Specific Time (with seconds)
                     if (target.startAtEnabled && !perTargetScheduledDone.contains(target.id)) {
                         val tEpoch = computeTargetEpochMillis(
                             target.startAtHour, target.startAtMinute, target.startAtSecond, 0
