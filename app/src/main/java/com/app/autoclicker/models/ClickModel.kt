@@ -22,15 +22,37 @@ enum class StopMode {
 }
 
 data class TargetPoint(
-    val id: Int,
+    var id: Int,
     var x: Float,
     var y: Float,
     var isSwipe: Boolean = false,
     var endX: Float = 0f,
     var endY: Float = 0f,
+
+    // Target Enable / Disable State
+    var enabled: Boolean = true,
+
+    // Per-Target Start At Specific Time (Hour, Minute, Second)
+    var startAtEnabled: Boolean = false,
+    var startAtHour: Int = 12,
+    var startAtMinute: Int = 0,
+    var startAtSecond: Int = 0,
+
+    // Per-Target Basic Settings
     var customStartDelayMs: Long? = null,
+    var customStartDelayRandomMs: Long? = null,
     var customEndDelayMs: Long? = null,
-    var customDurationMs: Long? = null
+    var customEndDelayRandomMs: Long? = null,
+    var customDurationValue: Long? = null,
+    var customDurationUnit: TimeUnitType? = null,
+    var customDurationMs: Long? = null,
+
+    // Per-Target Advanced Settings
+    var repeatCount: Int = 0,          // 0 = Do Not Repeat
+    var disableAfterRuns: Int = 0,     // 0 = Do Not Disable
+
+    // Per-Target Randomization
+    var customRandomizationRadiusPx: Int? = null
 )
 
 data class ClickConfig(
@@ -43,7 +65,7 @@ data class ClickConfig(
     var durationMs: Long = 25L,
     var durationUnit: TimeUnitType = TimeUnitType.MILLISECONDS,
 
-    // Start Schedule
+    // Global Start Schedule
     var startMode: StartMode = StartMode.IMMEDIATE,
     var startAtHour: Int = 12,
     var startAtMinute: Int = 0,
@@ -104,6 +126,21 @@ data class ClickConfig(
                     put("isSwipe", t.isSwipe)
                     put("endX", t.endX.toDouble())
                     put("endY", t.endY.toDouble())
+                    put("enabled", t.enabled)
+                    put("startAtEnabled", t.startAtEnabled)
+                    put("startAtHour", t.startAtHour)
+                    put("startAtMinute", t.startAtMinute)
+                    put("startAtSecond", t.startAtSecond)
+                    t.customStartDelayMs?.let { put("customStartDelayMs", it) }
+                    t.customStartDelayRandomMs?.let { put("customStartDelayRandomMs", it) }
+                    t.customEndDelayMs?.let { put("customEndDelayMs", it) }
+                    t.customEndDelayRandomMs?.let { put("customEndDelayRandomMs", it) }
+                    t.customDurationValue?.let { put("customDurationValue", it) }
+                    t.customDurationUnit?.let { put("customDurationUnit", it.name) }
+                    t.customDurationMs?.let { put("customDurationMs", it) }
+                    put("repeatCount", t.repeatCount)
+                    put("disableAfterRuns", t.disableAfterRuns)
+                    t.customRandomizationRadiusPx?.let { put("customRandomizationRadiusPx", it) }
                 })
             }
             put("targets", arr)
@@ -160,7 +197,24 @@ data class ClickConfig(
                             y = item.optDouble("y", 700.0).toFloat(),
                             isSwipe = item.optBoolean("isSwipe", false),
                             endX = item.optDouble("endX", 400.0).toFloat(),
-                            endY = item.optDouble("endY", 450.0).toFloat()
+                            endY = item.optDouble("endY", 450.0).toFloat(),
+                            enabled = item.optBoolean("enabled", true),
+                            startAtEnabled = item.optBoolean("startAtEnabled", false),
+                            startAtHour = item.optInt("startAtHour", 12),
+                            startAtMinute = item.optInt("startAtMinute", 0),
+                            startAtSecond = item.optInt("startAtSecond", 0),
+                            customStartDelayMs = if (item.has("customStartDelayMs")) item.getLong("customStartDelayMs") else null,
+                            customStartDelayRandomMs = if (item.has("customStartDelayRandomMs")) item.getLong("customStartDelayRandomMs") else null,
+                            customEndDelayMs = if (item.has("customEndDelayMs")) item.getLong("customEndDelayMs") else null,
+                            customEndDelayRandomMs = if (item.has("customEndDelayRandomMs")) item.getLong("customEndDelayRandomMs") else null,
+                            customDurationValue = if (item.has("customDurationValue")) item.getLong("customDurationValue") else null,
+                            customDurationUnit = if (item.has("customDurationUnit")) {
+                                runCatching { TimeUnitType.valueOf(item.getString("customDurationUnit")) }.getOrNull()
+                            } else null,
+                            customDurationMs = if (item.has("customDurationMs")) item.getLong("customDurationMs") else null,
+                            repeatCount = item.optInt("repeatCount", 0),
+                            disableAfterRuns = item.optInt("disableAfterRuns", 0),
+                            customRandomizationRadiusPx = if (item.has("customRandomizationRadiusPx")) item.getInt("customRandomizationRadiusPx") else null
                         )
                     )
                 }
