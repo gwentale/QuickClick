@@ -79,6 +79,7 @@ data class ClickConfig(
     var stopAfterTimeMs: Long = 120_000L,
     var stopAtHour: Int = 12,
     var stopAtMinute: Int = 0,
+    var stopAtSecond: Int = 0,
     var stopAfterRunCount: Int = 50,
 
     // Randomization, Stealth & Advanced
@@ -111,6 +112,7 @@ data class ClickConfig(
             put("stopAfterTimeMs", stopAfterTimeMs)
             put("stopAtHour", stopAtHour)
             put("stopAtMinute", stopAtMinute)
+            put("stopAtSecond", stopAtSecond)
             put("stopAfterRunCount", stopAfterRunCount)
             put("ghostAntiDetect", ghostAntiDetect)
             put("randomizationRadiusPx", randomizationRadiusPx)
@@ -179,6 +181,7 @@ data class ClickConfig(
                 stopAfterTimeMs = obj.optLong("stopAfterTimeMs", 120_000L),
                 stopAtHour = obj.optInt("stopAtHour", 12),
                 stopAtMinute = obj.optInt("stopAtMinute", 0),
+                stopAtSecond = obj.optInt("stopAtSecond", 0),
                 stopAfterRunCount = obj.optInt("stopAfterRunCount", 50),
                 ghostAntiDetect = obj.optBoolean("ghostAntiDetect", false),
                 randomizationRadiusPx = obj.optInt("randomizationRadiusPx", 0),
