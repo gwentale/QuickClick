@@ -6,6 +6,7 @@ import android.graphics.Color
 import android.graphics.Typeface
 import android.graphics.drawable.GradientDrawable
 import android.os.Bundle
+import android.text.TextUtils
 import android.view.Gravity
 import android.widget.EditText
 import android.widget.ImageView
@@ -174,7 +175,7 @@ class SettingsActivity : AppCompatActivity() {
         val stopVal = when (cfg.stopMode) {
             StopMode.INDEFINITE -> "∞"
             StopMode.AFTER_AMOUNT_OF_TIME -> "${cfg.stopAfterTimeValue} ${cfg.stopAfterTimeUnit.label}"
-            StopMode.AT_SPECIFIC_TIME -> DialogHelper.format12Hour(cfg.stopAtHour, cfg.stopAtMinute)
+            StopMode.AT_SPECIFIC_TIME -> DialogHelper.format12HourWithSeconds(cfg.stopAtHour, cfg.stopAtMinute, cfg.stopAtSecond)
             StopMode.AFTER_RUN_COUNT -> "${cfg.stopAfterRunCount} Run(s)"
         }
         addSettingCard(
@@ -260,9 +261,9 @@ class SettingsActivity : AppCompatActivity() {
             "∞",
             "${cfg.stopAfterTimeValue} ${cfg.stopAfterTimeUnit.label}",
             if (cfg.stopMode == StopMode.AT_SPECIFIC_TIME) {
-                DialogHelper.format12Hour(cfg.stopAtHour, cfg.stopAtMinute)
+                DialogHelper.format12HourWithSeconds(cfg.stopAtHour, cfg.stopAtMinute, cfg.stopAtSecond)
             } else {
-                "Do Not Stop By Clock (${DialogHelper.format12Hour(cfg.stopAtHour, cfg.stopAtMinute)})"
+                "Do Not Stop By Clock (${DialogHelper.format12HourWithSeconds(cfg.stopAtHour, cfg.stopAtMinute, cfg.stopAtSecond)})"
             },
             "${cfg.stopAfterRunCount} Run(s)"
         )
@@ -336,18 +337,19 @@ class SettingsActivity : AppCompatActivity() {
                         DialogHelper.showScheduleClockDialog(
                             ctx = this,
                             title = "Stop At Specific Time",
-                            description = "Set a time to stop clicking.",
+                            description = "Set a time (Hour, Minute, Second) to stop clicking.",
                             immediateLabel = "Do Not Stop By Clock",
                             specificLabel = "Stop At Specific Time",
                             isImmediateInitial = (cfg.stopMode != StopMode.AT_SPECIFIC_TIME),
                             initHour24 = cfg.stopAtHour,
                             initMinute = cfg.stopAtMinute,
-                            initSecond = 0,
-                            includeSeconds = false,
+                            initSecond = cfg.stopAtSecond,
+                            includeSeconds = true,
                             isOverlay = false
-                        ) { isDoNotStopByClock, h, m, _ ->
+                        ) { isDoNotStopByClock, h, m, s ->
                             cfg.stopAtHour = h
                             cfg.stopAtMinute = m
+                            cfg.stopAtSecond = s
                             if (isDoNotStopByClock) {
                                 selectOnly(StopMode.INDEFINITE.ordinal)
                             } else {
@@ -371,7 +373,6 @@ class SettingsActivity : AppCompatActivity() {
                 }
             }
 
-            // Tapping the radio button selects that mode immediately; tapping the subtitle/row opens its value editor
             rb.setOnClickListener {
                 if (idx == StopMode.AT_SPECIFIC_TIME.ordinal) {
                     openOptionEditor()
@@ -397,7 +398,7 @@ class SettingsActivity : AppCompatActivity() {
         val prefs = getSharedPreferences("quickclick_presets", Context.MODE_PRIVATE)
         val layout = DialogHelper.createDarkDialogContent(
             this,
-            "Save current targets & settings as a preset, or load an existing preset."
+            "Save current targets & settings as a preset, update an existing preset, or load one."
         )
 
         val saveRow = LinearLayout(this).apply {
@@ -454,7 +455,7 @@ class SettingsActivity : AppCompatActivity() {
                 val itemCard = LinearLayout(this).apply {
                     orientation = LinearLayout.HORIZONTAL
                     gravity = Gravity.CENTER_VERTICAL
-                    setPadding(12.dp(), 10.dp(), 10.dp(), 10.dp())
+                    setPadding(12.dp(), 10.dp(), 8.dp(), 10.dp())
                     background = GradientDrawable().apply {
                         setColor(Color.parseColor("#12151C"))
                         cornerRadius = 10f.dpF()
@@ -462,28 +463,65 @@ class SettingsActivity : AppCompatActivity() {
                     }
                     layoutParams = LinearLayout.LayoutParams(-1, -2).apply { bottomMargin = 8.dp() }
                 }
+
                 val tvTitle = TextView(this).apply {
                     text = "${parsed.name} (${parsed.targets.size} targets)"
-                    textSize = 14f
+                    textSize = 13.5f
+                    maxLines = 2
+                    ellipsize = TextUtils.TruncateAt.END
                     setTextColor(Color.WHITE)
-                    layoutParams = LinearLayout.LayoutParams(0, -2, 1f)
+                    layoutParams = LinearLayout.LayoutParams(0, -2, 1f).apply { rightMargin = 6.dp() }
                 }
+
+                val btnUpdate = TextView(this).apply {
+                    text = "UPDATE"
+                    textSize = 11.5f
+                    setTypeface(null, Typeface.BOLD)
+                    setTextColor(Color.parseColor("#60A5FA"))
+                    setPadding(8.dp(), 5.dp(), 8.dp(), 5.dp())
+                    background = GradientDrawable().apply {
+                        setColor(Color.parseColor("#1A2979FF"))
+                        cornerRadius = 6f.dpF()
+                    }
+                    layoutParams = LinearLayout.LayoutParams(-2, -2).apply { rightMargin = 6.dp() }
+                    setOnClickListener {
+                        ConfigStore.activeConfig.name = parsed.name
+                        val updatedArr = JSONArray(prefs.getString("presets_list", "[]"))
+                        if (i < updatedArr.length()) {
+                            updatedArr.put(i, ConfigStore.activeConfig.toJson())
+                            prefs.edit().putString("presets_list", updatedArr.toString()).apply()
+                            refreshPresets()
+                            Toast.makeText(
+                                this@SettingsActivity,
+                                "Updated: ${parsed.name} (${ConfigStore.activeConfig.targets.size} targets)",
+                                Toast.LENGTH_SHORT
+                            ).show()
+                        }
+                    }
+                }
+
                 val btnLoad = TextView(this).apply {
                     text = "LOAD"
-                    textSize = 12f
+                    textSize = 11.5f
                     setTypeface(null, Typeface.BOLD)
                     setTextColor(Color.parseColor("#34D399"))
-                    setPadding(8.dp(), 4.dp(), 8.dp(), 4.dp())
+                    setPadding(8.dp(), 5.dp(), 8.dp(), 5.dp())
+                    background = GradientDrawable().apply {
+                        setColor(Color.parseColor("#1A34D399"))
+                        cornerRadius = 6f.dpF()
+                    }
+                    layoutParams = LinearLayout.LayoutParams(-2, -2).apply { rightMargin = 4.dp() }
                     setOnClickListener {
                         ConfigStore.activeConfig = ClickConfig.fromJson(jsonStr)
                         renderSettings()
                         Toast.makeText(this@SettingsActivity, "Loaded: ${parsed.name}", Toast.LENGTH_SHORT).show()
                     }
                 }
+
                 val ivDel = ImageView(this).apply {
                     setImageResource(R.drawable.ic_close)
                     imageTintList = ColorStateList.valueOf(Color.parseColor("#F87171"))
-                    setPadding(6.dp(), 4.dp(), 4.dp(), 4.dp())
+                    setPadding(4.dp(), 4.dp(), 4.dp(), 4.dp())
                     layoutParams = LinearLayout.LayoutParams(24.dp(), 24.dp())
                     setOnClickListener {
                         val updated = JSONArray()
@@ -492,7 +530,9 @@ class SettingsActivity : AppCompatActivity() {
                         refreshPresets()
                     }
                 }
+
                 itemCard.addView(tvTitle)
+                itemCard.addView(btnUpdate)
                 itemCard.addView(btnLoad)
                 itemCard.addView(ivDel)
                 listBox.addView(itemCard)
